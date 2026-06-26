@@ -108,6 +108,24 @@ button:disabled{ cursor:not-allowed; opacity:.45; }
 .metric.big{ grid-column:span 2; }
 .pos{ color:var(--green); } .neg{ color:var(--red); }
 
+/* советник (контекстная подсказка Кийосаки) */
+.advisor{ margin-top:12px; padding:11px 13px; border-radius:9px; font-size:13px; line-height:1.5;
+  background:linear-gradient(135deg,#22201a,#1a1813); border:1px solid var(--line-2);
+  border-left:4px solid var(--accent); color:var(--text-dim); }
+.advisor::before{ content:'💡 Совет: '; color:var(--accent); font-weight:700; }
+.advisor b{ color:var(--text); }
+
+/* справка */
+.help-modal{ max-width:600px; }
+.help-sec{ margin-bottom:16px; }
+.help-sec:last-child{ margin-bottom:0; }
+.help-sec h4{ font-size:15px; color:var(--accent); margin-bottom:5px; }
+.help-sec p{ font-size:14px; color:var(--text-dim); line-height:1.55; }
+
+/* выделенная карточка профиля «Я (Алексей)» */
+.prof-card.featured{ grid-column:span 2; border-color:var(--accent); background:linear-gradient(135deg,#262015,#1c1810); }
+.prof-card.featured .pc-name{ color:var(--accent); font-size:16px; }
+
 /* ---------- ФИНАНСОВЫЙ ОТЧЁТ ---------- */
 .statement .stmt-block{ margin-bottom:14px; }
 .stmt-head{ display:flex; justify-content:space-between; font-size:12px; text-transform:uppercase;
@@ -178,6 +196,13 @@ button:disabled{ cursor:not-allowed; opacity:.45; }
 .deal-stat{ background:var(--bg-3); border:1px solid var(--line); border-radius:8px; padding:10px; }
 .deal-stat .ds-l{ font-size:11px; color:var(--text-dim); text-transform:uppercase; }
 .deal-stat .ds-v{ font-size:18px; font-weight:700; font-family:var(--mono); margin-top:2px; }
+.yield-badge{ font-size:13px; padding:9px 12px; border-radius:8px; margin-bottom:14px; border-left:4px solid var(--line-2); background:var(--bg-3); }
+.yield-badge b{ font-family:var(--mono); }
+.yield-badge.great{ border-left-color:var(--green); background:#16261b; color:#9fe0b4; }
+.yield-badge.good{ border-left-color:#6fae4f; background:#1c2417; color:#bcd9a6; }
+.yield-badge.weak{ border-left-color:var(--accent); background:#241d12; color:#e6c896; }
+.yield-badge.trap{ border-left-color:var(--red); background:#2a1714; color:#f0a594; }
+
 .modal-foot{ padding:14px 20px; border-top:1px solid var(--line); display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; }
 .modal-note{ font-size:12px; color:var(--text-mut); margin-right:auto; align-self:center; }
 .qty-row{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }

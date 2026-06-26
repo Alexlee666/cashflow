@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="css/styles.css?v=3">
+<link rel="stylesheet" href="css/styles.css?v=4">
 </head>
 <body>
 
@@ -23,6 +23,7 @@
     <span class="tag">КРЫСИНЫЕ БЕГА · v0.1</span>
   </div>
   <div class="topbar-actions">
+    <button class="btn sm primary" id="btn-help">Справка</button>
     <button class="btn sm ghost" id="btn-restart">Новая игра</button>
     <button class="btn sm danger ghost" id="btn-reset">Сброс</button>
   </div>
@@ -48,6 +49,7 @@
         <div class="metric"><div class="m-label">Денежный поток</div><div class="m-val" id="m-cashflow">—</div></div>
         <div class="metric big"><div class="m-label">Наличные на руках</div><div class="m-val" id="m-cash">—</div></div>
       </div>
+      <div class="advisor" id="advisor"></div>
     </div>
 
     <div class="panel statement">
@@ -116,8 +118,8 @@
   <div class="modal" id="card-modal"></div>
 </div>
 
-<script src="js/data.js?v=3"></script>
-<script src="js/game.js?v=3"></script>
+<script src="js/data.js?v=4"></script>
+<script src="js/game.js?v=4"></script>
 <script>
   // регистрация service worker — офлайн-работа (только по http/https, не file://)
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

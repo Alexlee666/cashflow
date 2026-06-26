@@ -5,6 +5,7 @@
 'use strict';
 
 const SAVE_KEY = 'cashflow_save_v1';
+const LOAN_RATE = 0.03;   // платёж по банковскому кредиту = 3% от долга/мес (~36% годовых, потребкредит РФ)
 
 /* ----------------------- Состояние игры ----------------------- */
 let S = null;        // объект текущей игры
@@ -134,6 +135,9 @@ function render(){
   // строка игрока
   $('#player-line').textContent = `${S.name} · ${'👶'.repeat(S.children) || 'без детей'}`;
 
+  // советник
+  const adv = $('#advisor'); if(adv) adv.innerHTML = advisorTip(inc, exp, pas, cf);
+
   renderStatement(inc, exp, pas);
   renderBoard();
   renderLog();
@@ -168,8 +172,9 @@ function renderStatement(inc, exp, pas){
       if(a.kind === 'stock'){
         h += `<div class="stmt-row"><span class="lbl">${a.title} <span class="asset-tag">${a.shares} шт × ${fmt(a.price)}</span></span><span class="num">${fmt(a.shares*a.price)}</span></div>`;
       }else{
-        const tag = a.kind === 'realestate' ? 'аренда' : 'бизнес';
-        h += `<div class="stmt-row"><span class="lbl">${a.title} <span class="asset-tag">${tag} +${fmt(a.cashflow)}</span></span><span class="num">${fmt(a.cost)}</span></div>`;
+        const tag = a.real ? 'своё' : (a.kind === 'realestate' ? 'аренда' : 'бизнес');
+        const val = a.cost > 0 ? fmt(a.cost) : '—';
+        h += `<div class="stmt-row"><span class="lbl">${a.title} <span class="asset-tag">${tag} +${fmt(a.cashflow)}</span></span><span class="num">${val}</span></div>`;
       }
     }
     $('#stmt-assets').innerHTML = h;
@@ -195,6 +200,7 @@ function renderStatement(inc, exp, pas){
    МОДАЛКИ
    ==================================================================== */
 function openCard(html){
+  $('#card-modal').className = 'modal';   // сброс спец-классов (напр. help-modal)
   $('#card-modal').innerHTML = html;
   $('#card-overlay').classList.add('show');
 }
@@ -202,6 +208,23 @@ function closeCard(){ $('#card-overlay').classList.remove('show'); }
 
 function dealStat(label, val, cls){
   return `<div class="deal-stat"><div class="ds-l">${label}</div><div class="ds-v ${cls||''}">${val}</div></div>`;
+}
+
+/* Индикатор качества сделки: годовая доходность на вложенные деньги + вердикт.
+   invested — наличные на входе (взнос/цена), annualCf — поток за год. */
+function yieldBadge(invested, annualCf){
+  if(annualCf <= 0){
+    return `<div class="yield-badge trap">⚠ Поток минусовой - это пассив, а не актив. Будешь кормить его из зарплаты.</div>`;
+  }
+  if(invested <= 0) return '';
+  const y = annualCf / invested;            // годовая доходность
+  const pct = Math.round(y * 100);
+  let cls, verdict;
+  if(y >= 0.25){ cls='great'; verdict='Отличный денежный поток'; }
+  else if(y >= 0.12){ cls='good'; verdict='Хороший актив'; }
+  else if(y >= 0.05){ cls='weak'; verdict='Слабая доходность - окупается долго'; }
+  else { cls='weak'; verdict='Очень слабо - почти как вклад, но с риском'; }
+  return `<div class="yield-badge ${cls}">Доходность ≈ <b>${pct}%</b> годовых на вложенное · ${verdict}</div>`;
 }
 
 /* ====================================================================
@@ -226,13 +249,18 @@ let selectedProf = null;
 
 function renderProfGrid(){
   const grid = $('#prof-grid');
-  grid.innerHTML = PROFESSIONS.map(p => {
+  grid.innerHTML = ALL_PROFILES.map(p => {
     let liabPay = 0; for(const k in p.liabilities) liabPay += p.liabilities[k].payment;
     const exp = p.taxes + p.otherExpenses + liabPay;
-    const cf = p.salary - exp;
-    return `<button class="prof-card" data-id="${p.id}">
-      <div class="pc-name">${p.name}</div>
-      <div class="pc-line"><span>Зарплата</span><span class="num">${fmt(p.salary)}</span></div>
+    let passive = 0; (p.startAssets || []).forEach(a => passive += a.cashflow || 0);
+    const cf = p.salary + passive - exp;
+    const featured = p.real ? ' featured' : '';
+    const passiveLine = passive > 0
+      ? `<div class="pc-line"><span>Пассивный</span><span class="num pc-cf">${fmt(passive)}</span></div>` : '';
+    return `<button class="prof-card${featured}" data-id="${p.id}">
+      <div class="pc-name">${p.real ? '★ ' : ''}${p.name}</div>
+      <div class="pc-line"><span>${p.real ? 'Активный доход' : 'Зарплата'}</span><span class="num">${fmt(p.salary)}</span></div>
+      ${passiveLine}
       <div class="pc-line"><span>Расходы</span><span class="num">${fmt(exp)}</span></div>
       <div class="pc-line"><span>Ден. поток</span><span class="num pc-cf">${fmtSigned(cf)}</span></div>
       <div class="pc-line"><span>Наличные</span><span class="num">${fmt(p.cash)}</span></div>
@@ -243,21 +271,23 @@ function renderProfGrid(){
       grid.querySelectorAll('.prof-card').forEach(c => c.classList.remove('sel'));
       card.classList.add('sel');
       selectedProf = card.dataset.id;
-      $('#start-note').textContent = 'Выбрано: ' + PROFESSIONS.find(p=>p.id===selectedProf).name;
+      $('#start-note').textContent = 'Выбрано: ' + ALL_PROFILES.find(p=>p.id===selectedProf).name;
       $('#btn-start').disabled = false;
     });
   });
 }
 
 function startGame(profId){
-  const p = PROFESSIONS.find(x => x.id === profId);
+  const p = ALL_PROFILES.find(x => x.id === profId);
+  // стартовые активы (для профиля «Я» — уже имеющийся пассивный доход)
+  const assets = (p.startAssets || []).map((a, i) => Object.assign({ id: 'seed'+i }, a));
   S = {
-    prof: p.id, name: p.name,
+    prof: p.id, name: p.name, real: !!p.real,
     salary: p.salary, cash: p.cash,
     children: 0, perChild: p.perChild,
     taxes: p.taxes, otherExpenses: p.otherExpenses,
     liabilities: JSON.parse(JSON.stringify(p.liabilities)),
-    assets: [],
+    assets: assets,
     position: 0, turn: 1,
     charityTurns: 0, skipTurns: 0,
     won: false,
@@ -265,7 +295,11 @@ function startGame(profId){
   };
   $('#start-overlay').classList.remove('show');
   $('#game-view').style.display = 'grid';
-  log(`Старт! Профессия: <b>${p.name}</b>. Цель - пассивный доход ≥ расходов (${fmt(totalExpense())}/мес).`, 'gold');
+  if(p.real){
+    log(`Старт от себя! Активный доход ${fmt(p.salary)}, пассивный ${fmt(passiveIncome())}. До выхода из крысиных бегов: ${fmt(Math.max(0,totalExpense()-passiveIncome()))}/мес пассивного потока.`, 'gold');
+  }else{
+    log(`Старт! Профессия: <b>${p.name}</b>. Цель - пассивный доход ≥ расходов (${fmt(totalExpense())}/мес).`, 'gold');
+  }
   render();
 }
 
@@ -422,6 +456,7 @@ function showDeal(deal, size){
     <div class="modal-body">
       <p class="deal-sub">${deal.sub}</p>
       <div class="deal-stats">${stats}</div>
+      ${yieldBadge(deal.down, deal.cashflow * 12)}
       <p class="deal-desc">${deal.desc}</p>
     </div>
     <div class="modal-foot">
@@ -453,6 +488,7 @@ function showStockDeal(deal, badge){
         ${dealStat('Цена за акцию', fmt(deal.price))}
         ${dealStat('Дивиденд', deal.dividend>0?fmt(deal.dividend):'—', 'pos')}
       </div>
+      ${deal.dividend > 0 ? yieldBadge(deal.price, deal.dividend * 12) : '<div class="yield-badge weak">Без дивидендов: заработок только на перепродаже дороже. Потока нет.</div>'}
       <p class="deal-desc">${deal.desc} ${divLine}.</p>
       <div class="qty-row">
         <label>Сколько акций:</label>
@@ -510,7 +546,7 @@ function cellDoodad(){
     <div class="modal-body">
       <p class="deal-desc">${card.desc}</p>
       <div class="deal-stats">${dealStat('К оплате', fmt(card.amount), 'neg')}${dealStat('Наличные', fmt(S.cash))}</div>
-      ${needLoan ? `<p class="modal-note" style="color:var(--red)">Наличных не хватает - придётся взять кредит ${fmt(loanAmt)} (платёж +${fmt(Math.round(loanAmt*0.1))}/мес).</p>` : ''}
+      ${needLoan ? `<p class="modal-note" style="color:var(--red)">Наличных не хватает - придётся взять кредит ${fmt(loanAmt)} (платёж +${fmt(Math.round(loanAmt*LOAN_RATE))}/мес).</p>` : ''}
     </div>
     <div class="modal-foot">
       <button class="btn primary" id="dd-pay">${needLoan?'Взять кредит и оплатить':'Оплатить'}</button>
@@ -671,7 +707,7 @@ function takeBankLoan(amount, silent){
     S.liabilities['Банковский кредит'] = { balance:0, payment:0 };
   const L = S.liabilities['Банковский кредит'];
   L.balance += amount;
-  L.payment = Math.round(L.balance * 0.10);
+  L.payment = Math.round(L.balance * LOAN_RATE);
   S.cash += amount;
   if(!silent) log(`Взят кредит ${fmt(amount)} (платёж теперь ${fmt(L.payment)}/мес).`, 'bad');
 }
@@ -683,7 +719,7 @@ function openLoanModal(){
   openCard(`
     <div class="modal-head"><span class="deck-badge badge-event">банк</span><h3>Банковский кредит</h3></div>
     <div class="modal-body">
-      <p class="deal-desc">Кредит выдаётся кратно 1000 ₽. Ежемесячный платёж - 10% от суммы долга.</p>
+      <p class="deal-desc">Кредит выдаётся кратно 1000 ₽. Ежемесячный платёж - 3% от суммы долга (≈36% годовых, как потребкредит).</p>
       ${hasLoan?`<div class="deal-stats">${dealStat('Текущий долг', fmt(L.balance), 'neg')}${dealStat('Платёж/мес', fmt(L.payment))}</div>`:''}
       <div class="qty-row">
         <label>Сумма (₽):</label>
@@ -707,7 +743,7 @@ function openLoanModal(){
     amt = Math.min(amt, L.balance, S.cash);
     if(amt < 1000){ log('Для погашения нужно не меньше 1000 ₽ наличными.', ''); return; }
     L.balance -= amt; S.cash -= amt;
-    L.payment = Math.round(L.balance * 0.10);
+    L.payment = Math.round(L.balance * LOAN_RATE);
     if(L.balance <= 0) delete S.liabilities['Банковский кредит'];
     log(`Погашено ${fmt(amt)} кредита.`, 'good');
     closeCard(); render();
@@ -741,6 +777,43 @@ function checkWin(){
 }
 
 /* ====================================================================
+   СОВЕТНИК (контекстные подсказки в духе Кийосаки)
+   ==================================================================== */
+function advisorTip(inc, exp, pas, cf){
+  const gap = exp - pas;
+  const L = S.liabilities['Банковский кредит'];
+  // приоритет: критичные состояния → потом обучающие
+  if(cf < 0)
+    return 'Денежный поток <b>отрицательный</b> - расходы выше дохода. Гаси дорогие долги и не бери новых пассивов.';
+  if(L && L.balance > 0)
+    return `На тебе банковский кредит ${fmt(L.balance)} под 3%/мес - это якорь. Гаси его в первую очередь (кнопка «Взять кредит»).`;
+  if(pas <= 0)
+    return 'Пока твои деньги не работают. Купи первый <b>актив</b> с потоком: вклад, ОФЗ, дивидендные акции или малый бизнес.';
+  if(S.cash > 1500000)
+    return `На руках ${fmt(S.cash)} лежат без дела. Деньги должны работать - вложи их в актив, дающий поток.`;
+  if(gap <= 0)
+    return 'Пассивный доход уже покрывает расходы - ты свободен! Можно выходить из крысиных бегов.';
+  if(gap < exp * 0.25)
+    return `Ты почти у цели! До выхода - всего ${fmt(gap)}/мес пассивного потока. Ещё пара активов - и свобода.`;
+  if(pas < exp * 0.5)
+    return `Хорошее начало: пассивный ${fmt(pas)} из ${fmt(exp)}. Сравнивай сделки по доходности и бери активы с потоком, а не пассивы.`;
+  return `Держи курс: каждый новый актив приближает выход. Осталось закрыть ${fmt(gap)}/мес пассивным доходом.`;
+}
+
+/* ====================================================================
+   СПРАВКА (принципы Кийосаки)
+   ==================================================================== */
+function openHelp(){
+  const secs = HELP_SECTIONS.map(s => `<div class="help-sec"><h4>${s.h}</h4><p>${s.p}</p></div>`).join('');
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-small">справка</span><h3>Как победить: принципы Кийосаки</h3></div>
+    <div class="modal-body">${secs}</div>
+    <div class="modal-foot"><button class="btn primary" id="help-close">Понятно, играем</button></div>`);
+  $('#card-modal').classList.add('help-modal');
+  $('#help-close').onclick = () => closeCard();
+}
+
+/* ====================================================================
    ИНИЦИАЛИЗАЦИЯ
    ==================================================================== */
 function init(){
@@ -750,6 +823,7 @@ function init(){
   $('#btn-start').onclick = () => { if(selectedProf) startGame(selectedProf); };
   $('#btn-roll').onclick = onRollClick;
   $('#dice').onclick = onRollClick;
+  $('#btn-help').onclick = openHelp;
   $('#btn-loan').onclick = openLoanModal;
 
   $('#btn-restart').onclick = () => {

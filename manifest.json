@@ -1,0 +1,15 @@
+{
+  "name": "CASHFLOW — денежный поток",
+  "short_name": "CASHFLOW",
+  "description": "Игра про денежный поток и выход из крысиных бегов",
+  "lang": "ru",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14171c",
+  "theme_color": "#14171c",
+  "icons": [
+    { "src": "icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

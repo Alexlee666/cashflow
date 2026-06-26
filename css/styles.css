@@ -1,0 +1,240 @@
+/* ====================================================================
+   CASHFLOW — тёмная индустриальная тема (графит / сталь, в духе КАВЕЛТ)
+   ==================================================================== */
+:root{
+  --bg:        #14171c;   /* графит-фон */
+  --bg-2:      #1b1f26;   /* панели */
+  --bg-3:      #232932;   /* карточки/инпуты */
+  --line:      #2e3641;   /* границы */
+  --line-2:    #3a444f;
+  --text:      #e7ecf2;   /* основной текст */
+  --text-dim:  #9aa6b2;   /* приглушённый */
+  --text-mut:  #6b7682;   /* совсем тихий */
+  --accent:    #e8a13a;   /* сталь-оранж, акцент бренда */
+  --accent-2:  #c9842a;
+  --green:     #3fb964;   /* доход / плюс */
+  --red:       #e0533d;   /* расход / долг */
+  --blue:      #4a9fe0;   /* инфо */
+  --purple:    #9b7ad6;
+  --radius:    10px;
+  --shadow:    0 6px 24px rgba(0,0,0,.35);
+  --mono: 'Consolas','SF Mono',ui-monospace,monospace;
+  --sans: 'Segoe UI',system-ui,-apple-system,sans-serif;
+}
+
+*{ box-sizing:border-box; margin:0; padding:0; }
+html,body{ height:100%; }
+body{
+  font-family:var(--sans);
+  background:
+    radial-gradient(1200px 600px at 80% -10%, #1d2530 0%, transparent 60%),
+    var(--bg);
+  background-color:var(--bg);
+  color:var(--text);
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+button{ font-family:inherit; cursor:pointer; }
+button:disabled{ cursor:not-allowed; opacity:.45; }
+
+/* ---------- ШАПКА ---------- */
+.topbar{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:12px 22px; border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,#1a1e25,#15181d);
+}
+.brand{ display:flex; align-items:baseline; gap:12px; }
+.brand h1{ font-size:20px; letter-spacing:3px; font-weight:700; }
+.brand .accent{ color:var(--accent); }
+.brand .tag{ font-size:12px; color:var(--text-mut); letter-spacing:1px; }
+.topbar-actions{ display:flex; gap:8px; }
+
+/* ---------- КНОПКИ ---------- */
+.btn{
+  background:var(--bg-3); color:var(--text); border:1px solid var(--line-2);
+  padding:9px 16px; border-radius:8px; font-size:14px; font-weight:600;
+  transition:.15s; letter-spacing:.3px;
+}
+.btn:hover:not(:disabled){ border-color:var(--accent); color:#fff; }
+.btn.primary{ background:var(--accent); color:#1a1205; border-color:var(--accent); }
+.btn.primary:hover:not(:disabled){ background:var(--accent-2); border-color:var(--accent-2); color:#1a1205; }
+.btn.ghost{ background:transparent; }
+.btn.danger:hover:not(:disabled){ border-color:var(--red); color:var(--red); }
+.btn.sm{ padding:6px 11px; font-size:13px; }
+.btn.big{ padding:13px 22px; font-size:16px; }
+
+/* ---------- РАСКЛАДКА ---------- */
+.layout{
+  display:grid;
+  grid-template-columns: 360px 1fr 340px;
+  gap:16px; padding:16px; max-width:1500px; margin:0 auto;
+  align-items:start;
+}
+@media (max-width:1200px){ .layout{ grid-template-columns:1fr; } }
+
+/* убрать задержку и double-tap zoom на кнопках (тач) */
+.btn, .dice, .prof-card{ touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
+
+.panel{
+  background:var(--bg-2); border:1px solid var(--line);
+  border-radius:var(--radius); padding:16px; box-shadow:var(--shadow);
+}
+.panel h2{
+  font-size:13px; text-transform:uppercase; letter-spacing:1.5px;
+  color:var(--text-dim); margin-bottom:12px; font-weight:700;
+  display:flex; align-items:center; gap:8px;
+}
+.panel h2::before{ content:''; width:4px; height:14px; background:var(--accent); border-radius:2px; }
+
+/* ---------- ПРИБОРНАЯ ПАНЕЛЬ ---------- */
+.dash-goal{
+  background:linear-gradient(135deg,#21262f,#191d24);
+  border:1px solid var(--line-2); border-radius:var(--radius);
+  padding:16px; margin-bottom:14px; text-align:center;
+}
+.dash-goal .goal-label{ font-size:12px; color:var(--text-dim); letter-spacing:1px; text-transform:uppercase; }
+.dash-goal .goal-num{ font-size:30px; font-weight:800; font-family:var(--mono); margin:4px 0; }
+.dash-goal .goal-num.win{ color:var(--green); }
+.progress{ height:10px; background:var(--bg); border-radius:6px; overflow:hidden; border:1px solid var(--line); margin-top:8px; }
+.progress > span{ display:block; height:100%; background:linear-gradient(90deg,var(--accent),var(--green)); transition:width .4s; }
+.dash-goal .goal-sub{ font-size:12px; color:var(--text-mut); margin-top:6px; }
+
+.metrics{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.metric{
+  background:var(--bg-3); border:1px solid var(--line); border-radius:8px; padding:10px 12px;
+}
+.metric .m-label{ font-size:11px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.5px; }
+.metric .m-val{ font-size:19px; font-weight:700; font-family:var(--mono); margin-top:2px; }
+.metric.big{ grid-column:span 2; }
+.pos{ color:var(--green); } .neg{ color:var(--red); }
+
+/* ---------- ФИНАНСОВЫЙ ОТЧЁТ ---------- */
+.statement .stmt-block{ margin-bottom:14px; }
+.stmt-head{ display:flex; justify-content:space-between; font-size:12px; text-transform:uppercase;
+  letter-spacing:1px; color:var(--text-dim); border-bottom:1px solid var(--line); padding-bottom:5px; margin-bottom:6px; }
+.stmt-row{ display:flex; justify-content:space-between; font-size:13px; padding:3px 0; color:var(--text); }
+.stmt-row .lbl{ color:var(--text-dim); }
+.stmt-row .num{ font-family:var(--mono); }
+.stmt-total{ display:flex; justify-content:space-between; font-weight:700; font-size:14px;
+  border-top:1px solid var(--line-2); margin-top:5px; padding-top:5px; font-family:var(--mono); }
+.asset-tag{ font-size:10px; padding:1px 6px; border-radius:4px; background:var(--bg); border:1px solid var(--line-2); color:var(--text-mut); margin-left:6px; }
+
+/* ---------- ДОСКА ---------- */
+.board-wrap{ display:flex; flex-direction:column; align-items:center; }
+#board{ width:100%; max-width:560px; aspect-ratio:1/1; }
+.cell-rect{ stroke:var(--line-2); stroke-width:1.2; }
+.cell-deal{ fill:#202730; } .cell-payday{ fill:#23311f; } .cell-doodad{ fill:#2f2420; }
+.cell-market{ fill:#1f2a33; } .cell-charity{ fill:#2a2433; } .cell-baby{ fill:#33302055; fill:#2c2a1f; }
+.cell-downsized{ fill:#341d1a; }
+.cell-label{ font-size:9px; fill:var(--text-dim); font-family:var(--sans); }
+.cell-icon{ font-size:15px; }
+.token{ fill:var(--accent); stroke:#1a1205; stroke-width:2; filter:drop-shadow(0 2px 4px rgba(0,0,0,.5)); }
+.board-center{ text-align:center; }
+
+/* кубик + управление */
+.controls{ display:flex; flex-direction:column; align-items:center; gap:12px; margin-top:8px; width:100%; }
+.dice{
+  width:72px; height:72px; border-radius:14px; background:linear-gradient(135deg,#f4f6f8,#cdd4dc);
+  display:grid; place-items:center; font-size:40px; font-weight:800; color:#1a1d22;
+  box-shadow:0 6px 16px rgba(0,0,0,.4); user-select:none; font-family:var(--mono);
+}
+.dice.rolling{ animation:shake .5s ease; }
+@keyframes shake{ 0%,100%{transform:rotate(0)} 25%{transform:rotate(-12deg) scale(1.05)} 75%{transform:rotate(12deg) scale(1.05)} }
+.turn-hint{ font-size:13px; color:var(--text-dim); text-align:center; min-height:18px; }
+
+/* ---------- ЛОГ ---------- */
+.log{ max-height:260px; overflow-y:auto; font-size:13px; }
+.log-entry{ padding:6px 8px; border-radius:6px; margin-bottom:4px; border-left:3px solid var(--line-2); background:var(--bg-3); color:var(--text-dim); }
+.log-entry.good{ border-left-color:var(--green); }
+.log-entry.bad{ border-left-color:var(--red); }
+.log-entry.info{ border-left-color:var(--blue); }
+.log-entry.gold{ border-left-color:var(--accent); color:var(--text); }
+.log-entry b{ color:var(--text); }
+
+/* ---------- МОДАЛКИ ---------- */
+.overlay{
+  position:fixed; inset:0; background:rgba(8,10,13,.78); backdrop-filter:blur(3px);
+  display:none; align-items:center; justify-content:center; z-index:50; padding:20px;
+}
+.overlay.show{ display:flex; }
+.modal{
+  background:var(--bg-2); border:1px solid var(--line-2); border-radius:14px;
+  max-width:520px; width:100%; box-shadow:var(--shadow); overflow:hidden;
+  animation:pop .2s ease;
+}
+@keyframes pop{ from{ transform:scale(.95); opacity:0 } to{ transform:scale(1); opacity:1 } }
+.modal-head{ padding:16px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+.modal-head .deck-badge{ font-size:11px; text-transform:uppercase; letter-spacing:1px; padding:3px 9px; border-radius:5px; font-weight:700; }
+.badge-small{ background:#23402a; color:#7fd99a; }
+.badge-big{ background:#3a2a14; color:var(--accent); }
+.badge-market{ background:#1f3340; color:#7cc4ee; }
+.badge-doodad{ background:#3a241f; color:#e89a86; }
+.badge-event{ background:#2a2433; color:#bda3e6; }
+.modal-head h3{ font-size:18px; }
+.modal-body{ padding:20px; }
+.modal-body .deal-sub{ color:var(--text-dim); font-size:13px; margin-bottom:12px; }
+.modal-body .deal-desc{ color:var(--text-dim); font-size:14px; margin-bottom:16px; font-style:italic; }
+.deal-stats{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:16px; }
+.deal-stat{ background:var(--bg-3); border:1px solid var(--line); border-radius:8px; padding:10px; }
+.deal-stat .ds-l{ font-size:11px; color:var(--text-dim); text-transform:uppercase; }
+.deal-stat .ds-v{ font-size:18px; font-weight:700; font-family:var(--mono); margin-top:2px; }
+.modal-foot{ padding:14px 20px; border-top:1px solid var(--line); display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; }
+.modal-note{ font-size:12px; color:var(--text-mut); margin-right:auto; align-self:center; }
+.qty-row{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+.qty-row input{ width:120px; background:var(--bg-3); border:1px solid var(--line-2); color:var(--text);
+  padding:8px 10px; border-radius:7px; font-family:var(--mono); font-size:15px; }
+.qty-row label{ font-size:13px; color:var(--text-dim); }
+
+/* ---------- СТАРТОВЫЙ ЭКРАН ---------- */
+.start-screen{ max-width:560px; }
+.prof-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; }
+.prof-card{
+  background:var(--bg-3); border:1px solid var(--line-2); border-radius:9px; padding:12px;
+  text-align:left; transition:.15s;
+}
+.prof-card:hover{ border-color:var(--accent); }
+.prof-card.sel{ border-color:var(--accent); background:#262015; }
+.prof-card .pc-name{ font-weight:700; font-size:15px; margin-bottom:6px; }
+.prof-card .pc-line{ display:flex; justify-content:space-between; font-size:12px; color:var(--text-dim); }
+.prof-card .pc-line .num{ font-family:var(--mono); }
+.prof-card .pc-cf{ color:var(--green); }
+
+.children-dots{ display:flex; gap:6px; }
+.child-dot{ width:14px; height:14px; border-radius:50%; background:var(--bg); border:1px solid var(--line-2); }
+.child-dot.on{ background:var(--accent); border-color:var(--accent); }
+
+.win-screen .modal-body{ text-align:center; }
+.win-screen h3{ font-size:24px; }
+.win-big{ font-size:40px; margin:14px 0; }
+
+/* скроллбары */
+::-webkit-scrollbar{ width:9px; height:9px; }
+::-webkit-scrollbar-track{ background:var(--bg); }
+::-webkit-scrollbar-thumb{ background:var(--line-2); border-radius:5px; }
+::-webkit-scrollbar-thumb:hover{ background:var(--text-mut); }
+
+/* ====================================================================
+   ТЕЛЕФОН (iPhone и узкие экраны) — в конце файла, чтобы переопределять
+   ==================================================================== */
+@media (max-width:760px){
+  .layout{ padding:10px; gap:12px; }
+  .panel{ padding:13px; }
+  /* доска с кубиком — наверх, она про действие */
+  #game-view > section:nth-child(2){ order:-1; }
+  #game-view > section:nth-child(3){ order:1; }
+  .topbar{ padding:10px 14px; }
+  .brand h1{ font-size:18px; letter-spacing:2px; }
+  .brand .tag{ display:none; }
+  .dash-goal .goal-num{ font-size:26px; }
+  .metric .m-val{ font-size:17px; }
+  #board{ max-width:none; }
+  .dice{ width:84px; height:84px; font-size:46px; }  /* крупнее под палец */
+  .btn{ padding:11px 16px; }
+  .btn.big{ padding:16px 26px; font-size:17px; }      /* удобная зона нажатия */
+  .controls{ gap:14px; }
+  .log{ max-height:200px; }
+  .prof-grid{ grid-template-columns:1fr; }
+  .modal{ max-height:88vh; overflow-y:auto; }
+  .modal-foot{ position:sticky; bottom:0; background:var(--bg-2); }
+  .deal-stats{ grid-template-columns:1fr 1fr; }
+}

@@ -1,0 +1,5 @@
+# служебное Claude Code / превью
+.claude/
+# временные
+*.log
+*.tmp

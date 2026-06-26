@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CASHFLOW — денежный поток</title>
+<!-- iOS: запуск с экрана «Домой» как приложение -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CASHFLOW">
+<meta name="theme-color" content="#14171c">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="css/styles.css?v=3">
+</head>
+<body>
+
+<!-- ШАПКА -->
+<header class="topbar">
+  <div class="brand">
+    <h1>CASH<span class="accent">FLOW</span></h1>
+    <span class="tag">КРЫСИНЫЕ БЕГА · v0.1</span>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn sm ghost" id="btn-restart">Новая игра</button>
+    <button class="btn sm danger ghost" id="btn-reset">Сброс</button>
+  </div>
+</header>
+
+<!-- ИГРОВОЙ ЭКРАН -->
+<main class="layout" id="game-view" style="display:none">
+
+  <!-- ЛЕВАЯ КОЛОНКА: приборная панель + финотчёт -->
+  <section>
+    <div class="panel" style="margin-bottom:16px">
+      <h2>Приборная панель</h2>
+      <div class="dash-goal">
+        <div class="goal-label">До выхода из крысиных бегов</div>
+        <div class="goal-num" id="goal-num">—</div>
+        <div class="progress"><span id="goal-bar" style="width:0%"></span></div>
+        <div class="goal-sub" id="goal-sub">пассивный доход против расходов</div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><div class="m-label">Доход / мес</div><div class="m-val" id="m-income">—</div></div>
+        <div class="metric"><div class="m-label">Расход / мес</div><div class="m-val" id="m-expense">—</div></div>
+        <div class="metric"><div class="m-label">Пассивный доход</div><div class="m-val pos" id="m-passive">—</div></div>
+        <div class="metric"><div class="m-label">Денежный поток</div><div class="m-val" id="m-cashflow">—</div></div>
+        <div class="metric big"><div class="m-label">Наличные на руках</div><div class="m-val" id="m-cash">—</div></div>
+      </div>
+    </div>
+
+    <div class="panel statement">
+      <h2>Финансовый отчёт</h2>
+      <div class="stmt-block">
+        <div class="stmt-head"><span>Доходы</span><span></span></div>
+        <div id="stmt-income"></div>
+      </div>
+      <div class="stmt-block">
+        <div class="stmt-head"><span>Расходы</span><span></span></div>
+        <div id="stmt-expense"></div>
+      </div>
+      <div class="stmt-block">
+        <div class="stmt-head"><span>Активы</span><span></span></div>
+        <div id="stmt-assets"></div>
+      </div>
+      <div class="stmt-block">
+        <div class="stmt-head"><span>Пассивы (долги)</span><span></span></div>
+        <div id="stmt-liab"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ЦЕНТР: доска + кубик -->
+  <section class="panel board-wrap">
+    <h2 style="align-self:flex-start" id="player-line">Игрок</h2>
+    <svg id="board" viewBox="0 0 560 560"></svg>
+    <div class="controls">
+      <div class="dice" id="dice">🎲</div>
+      <div class="turn-hint" id="turn-hint">Бросьте кубик, чтобы сделать ход</div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center">
+        <button class="btn primary big" id="btn-roll">Бросить кубик</button>
+        <button class="btn" id="btn-loan">Взять кредит</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ПРАВАЯ КОЛОНКА: журнал -->
+  <section class="panel">
+    <h2>Журнал хода</h2>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<!-- СТАРТОВЫЙ ЭКРАН (выбор профессии) -->
+<div class="overlay show" id="start-overlay">
+  <div class="modal start-screen">
+    <div class="modal-head">
+      <span class="deck-badge badge-big">старт</span>
+      <h3>Выберите профессию</h3>
+    </div>
+    <div class="modal-body">
+      <p class="deal-sub">У каждой профессии своя зарплата, расходы и долги. Цель - довести
+        пассивный доход до уровня расходов и выйти из крысиных бегов.</p>
+      <div class="prof-grid" id="prof-grid"></div>
+    </div>
+    <div class="modal-foot">
+      <span class="modal-note" id="start-note">Профессия не выбрана</span>
+      <button class="btn primary" id="btn-start" disabled>Начать игру</button>
+    </div>
+  </div>
+</div>
+
+<!-- УНИВЕРСАЛЬНАЯ МОДАЛКА (карточки/события) -->
+<div class="overlay" id="card-overlay">
+  <div class="modal" id="card-modal"></div>
+</div>
+
+<script src="js/data.js?v=3"></script>
+<script src="js/game.js?v=3"></script>
+<script>
+  // регистрация service worker — офлайн-работа (только по http/https, не file://)
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>

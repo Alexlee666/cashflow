@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="css/styles.css?v=4">
+<link rel="stylesheet" href="css/styles.css?v=5">
 </head>
 <body>
 
@@ -54,6 +54,7 @@
 
     <div class="panel statement">
       <h2>Финансовый отчёт</h2>
+      <p style="font-size:12px;color:var(--text-mut);margin:-6px 0 12px">Клик по активу - продать · клик по долгу - погасить досрочно</p>
       <div class="stmt-block">
         <div class="stmt-head"><span>Доходы</span><span></span></div>
         <div id="stmt-income"></div>
@@ -118,8 +119,8 @@
   <div class="modal" id="card-modal"></div>
 </div>
 
-<script src="js/data.js?v=4"></script>
-<script src="js/game.js?v=4"></script>
+<script src="js/data.js?v=5"></script>
+<script src="js/game.js?v=5"></script>
 <script>
   // регистрация service worker — офлайн-работа (только по http/https, не file://)
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

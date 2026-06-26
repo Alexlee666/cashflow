@@ -133,6 +133,9 @@ button:disabled{ cursor:not-allowed; opacity:.45; }
 .stmt-row{ display:flex; justify-content:space-between; font-size:13px; padding:3px 0; color:var(--text); }
 .stmt-row .lbl{ color:var(--text-dim); }
 .stmt-row .num{ font-family:var(--mono); }
+.stmt-row.manageable{ cursor:pointer; border-radius:5px; margin:0 -6px; padding-left:6px; padding-right:6px; transition:.12s; }
+.stmt-row.manageable:hover{ background:var(--bg-3); }
+.stmt-row.manageable:hover .lbl::after{ content:' ▸'; color:var(--accent); }
 .stmt-total{ display:flex; justify-content:space-between; font-weight:700; font-size:14px;
   border-top:1px solid var(--line-2); margin-top:5px; padding-top:5px; font-family:var(--mono); }
 .asset-tag{ font-size:10px; padding:1px 6px; border-radius:4px; background:var(--bg); border:1px solid var(--line-2); color:var(--text-mut); margin-left:6px; }

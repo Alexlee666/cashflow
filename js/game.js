@@ -170,11 +170,11 @@ function renderStatement(inc, exp, pas){
     h = '';
     for(const a of S.assets){
       if(a.kind === 'stock'){
-        h += `<div class="stmt-row"><span class="lbl">${a.title} <span class="asset-tag">${a.shares} шт × ${fmt(a.price)}</span></span><span class="num">${fmt(a.shares*a.price)}</span></div>`;
+        h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">${a.shares} шт × ${fmt(a.price)}</span></span><span class="num">${fmt(a.shares*a.price)}</span></div>`;
       }else{
         const tag = a.real ? 'своё' : (a.kind === 'realestate' ? 'аренда' : 'бизнес');
         const val = a.cost > 0 ? fmt(a.cost) : '—';
-        h += `<div class="stmt-row"><span class="lbl">${a.title} <span class="asset-tag">${tag} +${fmt(a.cashflow)}</span></span><span class="num">${val}</span></div>`;
+        h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">${tag} +${fmt(a.cashflow)}</span></span><span class="num">${val}</span></div>`;
       }
     }
     $('#stmt-assets').innerHTML = h;
@@ -186,8 +186,8 @@ function renderStatement(inc, exp, pas){
   }else{
     h = '';
     for(const k in S.liabilities)
-      h += `<div class="stmt-row"><span class="lbl">${k}</span><span class="num neg">${fmt(S.liabilities[k].balance)}</span></div>`;
-    // ипотеки по недвижимости (привязаны к активам)
+      h += `<div class="stmt-row manageable" data-liab="${k}"><span class="lbl">${k}</span><span class="num neg">${fmt(S.liabilities[k].balance)}</span></div>`;
+    // ипотеки по недвижимости (привязаны к активам — гасятся продажей объекта)
     for(const a of S.assets){
       if(a.debt > 0)
         h += `<div class="stmt-row"><span class="lbl">Ипотека: ${a.title}</span><span class="num neg">${fmt(a.debt)}</span></div>`;
@@ -569,6 +569,20 @@ function cellMarket(){
     return;
   }
 
+  if(card.type === 'bonus'){
+    openCard(`
+      <div class="modal-head"><span class="deck-badge badge-small">удача</span><h3>${card.title}</h3></div>
+      <div class="modal-body"><p class="deal-desc">${card.desc}</p>
+        <div class="deal-stats">${dealStat('Приток', fmtSigned(card.amount), 'pos')}</div></div>
+      <div class="modal-foot"><button class="btn primary" id="m-ok">Забрать ${fmt(card.amount)}</button></div>`);
+    $('#m-ok').onclick = () => {
+      S.cash += card.amount;
+      log(`Приятный сюрприз: <b>${card.title}</b> ${fmtSigned(card.amount)}.`, 'good');
+      closeCard(); endTurn();
+    };
+    return;
+  }
+
   if(card.type === 'stock_price'){
     S.marketPrices = S.marketPrices || {};
     S.marketPrices[card.symbol] = card.newPrice;
@@ -751,6 +765,114 @@ function openLoanModal(){
 }
 
 /* ====================================================================
+   АКТИВНОЕ УПРАВЛЕНИЕ ПОРТФЕЛЕМ (продажа активов, досрочное гашение долгов)
+   Доступно в любой момент своего хода (когда нет открытой карточки/анимации).
+   ==================================================================== */
+function manageAsset(id){
+  if(busy) return;
+  const a = S.assets.find(x => x.id === id);
+  if(!a) return;
+
+  // свои стартовые потоки (КАЭЛ, проценты) — это доход, не торгуемый актив
+  if(a.real){
+    openCard(simpleModal('badge-event','актив', a.title,
+      `Это твой действующий источник дохода (+${fmt(a.cashflow)}/мес), а не объект на продажу. В игре он не продаётся - его можно только наращивать в жизни.`, 'Ясно'));
+    $('#m-ok').onclick = () => closeCard();
+    return;
+  }
+
+  // акции — продажа по текущей цене, можно частично
+  if(a.kind === 'stock'){
+    const price = (S.marketPrices && S.marketPrices[a.symbol]) || a.price;
+    openCard(`
+      <div class="modal-head"><span class="deck-badge badge-market">продажа</span><h3>${a.title}</h3></div>
+      <div class="modal-body">
+        <div class="deal-stats">${dealStat('В портфеле', a.shares+' шт')}${dealStat('Текущая цена', fmt(price))}</div>
+        <div class="qty-row">
+          <label>Продать акций:</label>
+          <input type="number" id="sell-qty" value="${a.shares}" min="1" max="${a.shares}" step="1">
+          <span id="sell-sum" style="font-family:var(--mono)"></span>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" id="sell-cancel">Отмена</button>
+        <button class="btn primary" id="sell-do">Продать</button>
+      </div>`);
+    const q = $('#sell-qty'), sum = $('#sell-sum');
+    const upd = () => { const n=Math.min(a.shares,Math.max(0,parseInt(q.value)||0)); sum.textContent='= '+fmt(n*price); $('#sell-do').disabled=n<=0; };
+    q.addEventListener('input', upd); upd();
+    $('#sell-cancel').onclick = () => closeCard();
+    $('#sell-do').onclick = () => {
+      const n = Math.min(a.shares, Math.max(0, parseInt(q.value)||0));
+      if(n <= 0) return;
+      S.cash += n * price;
+      a.shares -= n;
+      if(a.shares <= 0) S.assets = S.assets.filter(x => x !== a);
+      log(`Продано ${n} акций <b>${a.symbol}</b> за ${fmt(n*price)}.`, 'good');
+      closeCard(); render();
+    };
+    return;
+  }
+
+  // недвижимость / бизнес — продажа по балансовой цене (без премии; премию даёт «Рынок»)
+  const salePrice = a.cost, net = salePrice - (a.debt || 0);
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-market">продажа</span><h3>${a.title}</h3></div>
+    <div class="modal-body">
+      <p class="deal-desc">Продажа по текущей цене, без премии (премию иногда даёт клетка «Рынок»). Поток ${fmtSigned(a.cashflow)}/мес уйдёт.</p>
+      <div class="deal-stats">
+        ${dealStat('Цена продажи', fmt(salePrice))}
+        ${a.debt>0?dealStat('Минус долг', fmt(a.debt), 'neg'):''}
+        ${dealStat('На руки', fmt(net), net>=0?'pos':'neg')}
+        ${dealStat('Теряешь поток', fmtSigned(-a.cashflow), 'neg')}
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="sell-cancel">Оставить</button>
+      <button class="btn primary" id="sell-do">Продать за ${fmt(net)}</button>
+    </div>`);
+  $('#sell-cancel').onclick = () => closeCard();
+  $('#sell-do').onclick = () => {
+    S.cash += net;
+    S.assets = S.assets.filter(x => x !== a);
+    log(`Продано: <b>${a.title}</b> за ${fmt(salePrice)} (на руки ${fmt(net)}).`, 'good');
+    closeCard(); render();
+  };
+}
+
+function manageLiability(name){
+  if(busy) return;
+  const L = S.liabilities[name];
+  if(!L) return;
+  const ratio = L.balance > 0 ? L.payment / L.balance : 0;   // сохраняем долю платежа при частичном гашении
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-event">досрочное гашение</span><h3>${name}</h3></div>
+    <div class="modal-body">
+      <p class="deal-desc">Гасим долг досрочно из наличных - кратно 1000 ₽. Чем меньше долг, тем меньше ежемесячный платёж.</p>
+      <div class="deal-stats">${dealStat('Остаток долга', fmt(L.balance), 'neg')}${dealStat('Платёж/мес', fmt(L.payment))}${dealStat('Наличные', fmt(S.cash))}</div>
+      <div class="qty-row">
+        <label>Погасить (₽):</label>
+        <input type="number" id="pay-amt" value="${Math.min(L.balance, Math.floor(S.cash/1000)*1000)}" min="0" step="1000">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="pay-cancel">Отмена</button>
+      <button class="btn primary" id="pay-do">Погасить</button>
+    </div>`);
+  $('#pay-cancel').onclick = () => closeCard();
+  $('#pay-do').onclick = () => {
+    let amt = Math.floor((parseInt($('#pay-amt').value)||0)/1000)*1000;
+    amt = Math.min(amt, L.balance, Math.floor(S.cash/1000)*1000);
+    if(amt < 1000){ log('Для гашения нужно не меньше 1000 ₽ наличными.', ''); return; }
+    L.balance -= amt; S.cash -= amt;
+    L.payment = Math.round(L.balance * ratio);
+    if(L.balance <= 0) delete S.liabilities[name];
+    log(`Досрочно погашено по «${name}»: ${fmt(amt)}.`, 'good');
+    closeCard(); render();
+  };
+}
+
+/* ====================================================================
    ПОБЕДА: выход из крысиных бегов
    ==================================================================== */
 function checkWin(){
@@ -825,6 +947,14 @@ function init(){
   $('#dice').onclick = onRollClick;
   $('#btn-help').onclick = openHelp;
   $('#btn-loan').onclick = openLoanModal;
+
+  // активное управление: клик по строке актива — продать, по строке долга — погасить
+  $('#stmt-assets').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-aid]'); if(row) manageAsset(row.dataset.aid);
+  });
+  $('#stmt-liab').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-liab]'); if(row) manageLiability(row.dataset.liab);
+  });
 
   $('#btn-restart').onclick = () => {
     if(confirm('Начать новую игру? Текущий прогресс будет сброшен.')){

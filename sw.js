@@ -1,12 +1,12 @@
 /* Service worker — офлайн-кэш приложения CASHFLOW.
    Стратегия: cache-first для своих файлов. Бампать CACHE при изменении ассетов. */
-const CACHE = 'cashflow-v5';
+const CACHE = 'cashflow-v6';
 const ASSETS = [
   './',
   './index.html',
-  './css/styles.css?v=5',
-  './js/data.js?v=5',
-  './js/game.js?v=5',
+  './css/styles.css?v=6',
+  './js/data.js?v=6',
+  './js/game.js?v=6',
   './manifest.json',
   './icon.png',
   './icon-512.png',

@@ -242,6 +242,32 @@ button:disabled{ cursor:not-allowed; opacity:.45; }
 ::-webkit-scrollbar-thumb:hover{ background:var(--text-mut); }
 
 /* ====================================================================
+   v6: HUD, полоса внимания, биржа, работы
+   ==================================================================== */
+.hud{ display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--text-dim);
+  background:var(--bg-3); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin-bottom:12px; font-family:var(--mono); }
+.hud span{ white-space:nowrap; }
+
+.time-block{ margin:12px 0; }
+.time-bar-wrap{ height:12px; background:var(--bg); border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+.time-fill{ display:block; height:100%; background:linear-gradient(90deg,#4a9fe0,#3fb964); transition:width .3s; }
+.time-fill.tight{ background:linear-gradient(90deg,var(--accent),#e0a13a); }
+.time-fill.over{ background:linear-gradient(90deg,var(--red),#c0392b); }
+.time-text{ font-size:12px; color:var(--text-dim); margin-top:5px; text-align:center; }
+
+/* биржа / работы — строки */
+.brk-row{ display:flex; justify-content:space-between; align-items:center; gap:10px;
+  background:var(--bg-3); border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
+.brk-info{ min-width:0; }
+.brk-name{ font-size:14px; font-weight:600; }
+.brk-sub{ font-size:12px; color:var(--text-dim); font-family:var(--mono); margin-top:2px; }
+.brk-own{ font-size:11px; color:var(--accent); margin-top:3px; }
+.brk-act{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
+.brk-qty{ width:64px; background:var(--bg); border:1px solid var(--line-2); color:var(--text);
+  padding:6px 8px; border-radius:6px; font-family:var(--mono); font-size:14px; }
+.broker-modal{ max-width:600px; }
+
+/* ====================================================================
    ТЕЛЕФОН (iPhone и узкие экраны) — в конце файла, чтобы переопределять
    ==================================================================== */
 @media (max-width:760px){

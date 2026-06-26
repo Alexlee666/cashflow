@@ -1,82 +1,146 @@
 /* ====================================================================
-   CASHFLOW — игровая логика (Крысиные бега, прототип v0.1)
+   CASHFLOW v6 — движок реалистичной игры
+   Время/внимание · возраст · инфляция · экспертиза · риск · налоги · биржа
    Чистый JS, без зависимостей. Сохранение в localStorage.
    ==================================================================== */
 'use strict';
 
-const SAVE_KEY = 'cashflow_save_v1';
-const LOAN_RATE = 0.03;   // платёж по банковскому кредиту = 3% от долга/мес (~36% годовых, потребкредит РФ)
+const SAVE_KEY = 'cashflow_save_v6';
+const LOAN_RATE = 0.03;   // платёж по банковскому кредиту = 3% долга/мес (~36% годовых)
 
-/* ----------------------- Состояние игры ----------------------- */
-let S = null;        // объект текущей игры
-let busy = false;    // блокировка во время анимаций/модалок
+let S = null;
+let busy = false;
 
 /* ----------------------- Утилиты ----------------------- */
-const $ = (sel) => document.querySelector(sel);
+const $ = (s) => document.querySelector(s);
 const rnd = (n) => Math.floor(Math.random() * n);
-const pick = (arr) => arr[rnd(arr.length)];
+const pick = (a) => a[rnd(a.length)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function fmt(n){
   const sign = n < 0 ? '-' : '';
   const abs = Math.abs(Math.round(n));
-  return sign + abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+  return sign + abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+}
+function fmtShort(n){
+  const a = Math.abs(n);
+  if(a >= 1e6) return (n/1e6).toFixed(a>=1e7?0:1).replace('.',',') + ' млн';
+  if(a >= 1e3) return Math.round(n/1e3) + ' тыс';
+  return Math.round(n) + '';
 }
 function fmtSigned(n){ return (n >= 0 ? '+' : '') + fmt(n); }
 
+/* ----------------------- Время / возраст ----------------------- */
+function curMonthIdx(){ return (CONFIG.startMonth + S.month) % 12; }
+function curYear(){ return CONFIG.startYear + Math.floor((CONFIG.startMonth + S.month) / 12); }
+function curAge(){ return S.age + Math.floor((CONFIG.startMonth + S.month) - CONFIG.startMonth >= 0 ? S.month/12 : 0); }
+function dateLabel(){ return MONTHS_RU[curMonthIdx()] + ' ' + curYear(); }
+
+/* ----------------------- Экспертиза / налоги ----------------------- */
+const EXP_FACTORS = [1.6, 1.0, 0.7, 0.45];           // 0..3 → множитель риска
+function expLevel(domain){ return (S.expertise && S.expertise[domain]) || 0; }
+function expFactor(domain){ return EXP_FACTORS[clamp(expLevel(domain),0,3)]; }
+function expLabel(domain){ return ['нет','базовая','хорошая','эксперт'][clamp(expLevel(domain),0,3)]; }
+function taxOf(a){
+  if(a.cls === 'security') return CONFIG.tax.dividend;
+  if(a.cls === 'realestate') return CONFIG.tax.rent;
+  return CONFIG.tax.business;
+}
+
+/* ----------------------- Время / внимание ----------------------- */
+function jobHours(j){ return j.quit ? 0 : (j.delegated && j.delegate ? j.delegate.hours : j.hours); }
+function jobIncome(j){ return j.quit ? 0 : (j.delegated && j.delegate ? j.delegate.income : j.income); }
+function committedHours(){
+  let h = 0;
+  for(const j of S.jobs) h += jobHours(j);
+  for(const a of S.assets) h += a.hours || 0;
+  return h;
+}
+function freeHours(){ return CONFIG.timeCapacity - committedHours(); }
+function overload(){ return Math.max(0, committedHours() - CONFIG.timeCapacity); }
+function overloadPenalty(){
+  return clamp(1 - CONFIG.overloadSoftPenaltyPer10h * (overload()/10), 0.5, 1);
+}
+
 /* ----------------------- Финансовые расчёты ----------------------- */
-function passiveIncome(){
-  let p = 0;
-  for(const a of S.assets){
-    if(a.kind === 'stock'){ p += Math.round((a.dividend || 0) * a.shares); }
-    else { p += a.cashflow || 0; }
+function activeIncomeNet(){
+  let s = 0; for(const j of S.jobs) s += jobIncome(j);
+  return Math.round(s * overloadPenalty());
+}
+function assetMonthlyNet(a){
+  return Math.round(a.annualIncome * (a.health == null ? 1 : a.health) / 12 * (1 - taxOf(a)));
+}
+function securitiesDivMonthlyNet(){
+  let s = 0;
+  for(const sym in (S.holdings||{})){
+    const def = SECURITIES.find(x => x.sym === sym);
+    const h = S.holdings[sym];
+    if(def && h && h.shares > 0) s += def.dividend * h.shares;
   }
-  return p;
+  return Math.round(s / 12 * (1 - CONFIG.tax.dividend));
 }
-function liabPayments(){
-  let p = 0;
-  for(const k in S.liabilities){ p += S.liabilities[k].payment; }
-  return p;
+function passiveNetMonthly(){
+  let s = 0;
+  for(const a of S.assets) s += assetMonthlyNet(a);
+  s += securitiesDivMonthlyNet();
+  return s;
 }
-function childExpense(){ return S.children * S.perChild; }
-function totalIncome(){ return S.salary + passiveIncome(); }
-function totalExpense(){ return S.taxes + S.otherExpenses + childExpense() + liabPayments(); }
-function cashflow(){ return totalIncome() - totalExpense(); }
-function isFree(){ return passiveIncome() >= totalExpense(); }
+function securitiesValue(){
+  let v = 0;
+  for(const sym in (S.holdings||{})){
+    const h = S.holdings[sym];
+    if(h && h.shares > 0) v += h.shares * (S.prices[sym] || 0);
+  }
+  return v;
+}
+function expensesMonthly(){
+  let s = 0;
+  for(const k in S.expenses) s += S.expenses[k];
+  s = s * S.inflationMult;
+  for(const k in S.liabilities) s += S.liabilities[k].payment;
+  return Math.round(s);
+}
+function cashflowMonthly(){ return activeIncomeNet() + passiveNetMonthly() - expensesMonthly(); }
+function isFree(){ return passiveNetMonthly() >= expensesMonthly(); }
+function netWorth(){
+  let assets = S.cash + securitiesValue();
+  for(const a of S.assets) assets += (a.cost || 0);
+  let debt = 0;
+  for(const k in S.liabilities) debt += S.liabilities[k].balance;
+  for(const a of S.assets) debt += (a.debt || 0);
+  return assets - debt;
+}
 
 /* ----------------------- Журнал ----------------------- */
 function log(msg, cls){
-  S.log.unshift({ msg, cls: cls || '', turn: S.turn });
-  if(S.log.length > 60) S.log.pop();
+  S.log.unshift({ msg, cls: cls || '', m: dateLabel() });
+  if(S.log.length > 80) S.log.pop();
   renderLog();
 }
 function renderLog(){
-  const el = $('#log');
-  el.innerHTML = S.log.map(e =>
-    `<div class="log-entry ${e.cls}"><span style="color:var(--text-mut);font-size:11px">[${e.turn}]</span> ${e.msg}</div>`
+  $('#log').innerHTML = S.log.map(e =>
+    `<div class="log-entry ${e.cls}"><span style="color:var(--text-mut);font-size:11px">${e.m}</span> ${e.msg}</div>`
   ).join('');
 }
 
 /* ====================================================================
-   ДОСКА (SVG)
-   7×7 кольцо = 24 клетки по периметру.
+   ДОСКА (SVG) — 7×7 кольцо = 24 клетки
    ==================================================================== */
-const ICONS = { deal:'💼', payday:'💰', doodad:'🛒', market:'📈', charity:'❤️', baby:'👶', downsized:'⚠️' };
+const ICONS = { deal:'💼', market:'📈', life:'🎲', doodad:'🛒' };
 let CELL_POS = [];
-
 function buildBoardPositions(){
   CELL_POS = [];
   const N = 7, margin = 14, area = 560 - margin*2, step = area / N, cw = step - 6;
-  const grid = []; // последовательность (col,row) по периметру по часовой
-  for(let c=0; c<N; c++) grid.push([c,0]);            // верх →
-  for(let r=1; r<N; r++) grid.push([N-1,r]);          // правый ↓
-  for(let c=N-2; c>=0; c--) grid.push([c,N-1]);       // низ ←
-  for(let r=N-2; r>=1; r--) grid.push([0,r]);         // левый ↑
+  const grid = [];
+  for(let c=0;c<N;c++) grid.push([c,0]);
+  for(let r=1;r<N;r++) grid.push([N-1,r]);
+  for(let c=N-2;c>=0;c--) grid.push([c,N-1]);
+  for(let r=N-2;r>=1;r--) grid.push([0,r]);
   for(const [c,r] of grid){
     const x = margin + c*step + 3, y = margin + r*step + 3;
     CELL_POS.push({ x, y, w:cw, h:cw, cx:x+cw/2, cy:y+cw/2 });
   }
 }
-
 function renderBoard(){
   const svg = $('#board');
   let html = '';
@@ -86,184 +150,199 @@ function renderBoard(){
     html += `<text class="cell-icon" x="${p.cx}" y="${p.cy-2}" text-anchor="middle" dominant-baseline="middle">${ICONS[cell.type]}</text>`;
     html += `<text class="cell-label" x="${p.cx}" y="${p.y+p.h-7}" text-anchor="middle">${cell.label}</text>`;
   }
-  // центр
-  html += `<text x="280" y="262" text-anchor="middle" style="fill:var(--text-mut);font-size:13px;letter-spacing:3px">КРЫСИНЫЕ</text>`;
-  html += `<text x="280" y="284" text-anchor="middle" style="fill:var(--text-mut);font-size:13px;letter-spacing:3px">БЕГА</text>`;
-  html += `<text x="280" y="312" text-anchor="middle" style="fill:var(--accent);font-size:11px;letter-spacing:1px" id="board-round"></text>`;
-  // фишка
+  html += `<text x="280" y="258" text-anchor="middle" style="fill:var(--text);font-size:15px;font-weight:700">${dateLabel()}</text>`;
+  html += `<text x="280" y="282" text-anchor="middle" style="fill:var(--text-mut);font-size:12px">возраст ${curAge()}</text>`;
+  html += `<text x="280" y="306" text-anchor="middle" style="fill:var(--accent);font-size:11px">месяц ${S.month+1}</text>`;
   const p0 = CELL_POS[S.position];
   html += `<circle class="token" id="token" cx="${p0.cx}" cy="${p0.cy}" r="11"/>`;
   svg.innerHTML = html;
-  $('#board-round').textContent = 'Ход ' + S.turn;
 }
-
 function moveToken(idx){
   const p = CELL_POS[idx], t = $('#token');
   if(t){ t.setAttribute('cx', p.cx); t.setAttribute('cy', p.cy); }
 }
 
 /* ====================================================================
-   РЕНДЕР ПАНЕЛЕЙ
+   РЕНДЕР
    ==================================================================== */
 function render(){
-  const inc = totalIncome(), exp = totalExpense(), pas = passiveIncome(), cf = cashflow();
+  const act = activeIncomeNet(), pas = passiveNetMonthly(), exp = expensesMonthly(), cf = act + pas - exp;
 
-  // приборная панель
-  $('#m-income').textContent  = fmt(inc);
+  $('#m-income').textContent  = fmt(act + pas);
   $('#m-expense').textContent = fmt(exp);
   $('#m-passive').textContent = fmt(pas);
-  const cfEl = $('#m-cashflow');
-  cfEl.textContent = fmtSigned(cf);
+  const cfEl = $('#m-cashflow'); cfEl.textContent = fmtSigned(cf);
   cfEl.className = 'm-val ' + (cf >= 0 ? 'pos' : 'neg');
   $('#m-cash').textContent = fmt(S.cash);
+  $('#m-networth').textContent = fmt(netWorth());
 
-  // цель: пассивный доход против расходов
+  // цель
   const gap = exp - pas;
   const goalNum = $('#goal-num');
-  if(gap <= 0){
-    goalNum.textContent = 'СВОБОДА!';
-    goalNum.classList.add('win');
-    $('#goal-sub').textContent = 'пассивный доход покрывает расходы';
-  }else{
-    goalNum.textContent = fmt(gap);
-    goalNum.classList.remove('win');
-    $('#goal-sub').textContent = `пассивный ${fmt(pas)} из ${fmt(exp)} расходов`;
-  }
-  const pct = Math.max(0, Math.min(100, exp > 0 ? (pas/exp*100) : 0));
-  $('#goal-bar').style.width = pct + '%';
+  if(gap <= 0){ goalNum.textContent = 'СВОБОДА!'; goalNum.classList.add('win'); $('#goal-sub').textContent = 'пассивный доход покрывает расходы'; }
+  else { goalNum.textContent = fmt(gap); goalNum.classList.remove('win'); $('#goal-sub').textContent = `пассивный ${fmt(pas)} из ${fmt(exp)} расходов`; }
+  $('#goal-bar').style.width = clamp(exp>0?pas/exp*100:0,0,100) + '%';
 
-  // строка игрока
-  $('#player-line').textContent = `${S.name} · ${'👶'.repeat(S.children) || 'без детей'}`;
+  // время / внимание
+  renderTime();
+  // календарь
+  $('#hud-date').textContent = dateLabel();
+  $('#hud-age').textContent = 'возраст ' + curAge();
+  $('#hud-infl').textContent = 'инфляция +' + Math.round((S.inflationMult-1)*100) + '%';
+
+  $('#player-line').textContent = `${S.name}`;
 
   // советник
-  const adv = $('#advisor'); if(adv) adv.innerHTML = advisorTip(inc, exp, pas, cf);
+  const adv = $('#advisor'); if(adv) adv.innerHTML = advisorTip(act, pas, exp, cf);
 
-  renderStatement(inc, exp, pas);
+  renderStatement(act, pas, exp);
   renderBoard();
   renderLog();
-  $('#btn-loan').disabled = busy;
   $('#btn-roll').disabled = busy;
+  $('#btn-broker').disabled = busy;
+  $('#btn-jobs').disabled = busy;
   save();
 }
 
-function renderStatement(inc, exp, pas){
-  // Доходы
-  let h = `<div class="stmt-row"><span class="lbl">Зарплата</span><span class="num">${fmt(S.salary)}</span></div>`;
-  h += `<div class="stmt-row"><span class="lbl">Пассивный доход</span><span class="num pos">${fmt(pas)}</span></div>`;
-  h += `<div class="stmt-total"><span>Итого доход</span><span>${fmt(inc)}</span></div>`;
+function renderTime(){
+  const cap = CONFIG.timeCapacity, used = committedHours(), free = cap - used, ov = overload();
+  const bar = $('#time-bar'), txt = $('#time-text');
+  const pctUsed = clamp(used/cap*100, 0, 100);
+  bar.style.width = pctUsed + '%';
+  bar.className = 'time-fill' + (ov>0 ? ' over' : (free<30 ? ' tight' : ''));
+  if(ov > 0) txt.innerHTML = `<b class="neg">Перегрузка ${ov} ч/мес</b> · занято ${used} из ${cap} ч · доход −${Math.round((1-overloadPenalty())*100)}%`;
+  else txt.innerHTML = `Свободно <b>${free} ч/мес</b> · занято ${used} из ${cap} ч`;
+}
+
+function renderStatement(act, pas, exp){
+  // Доходы (работы)
+  let h = '';
+  for(const j of S.jobs){
+    const inc = jobIncome(j);
+    const tag = j.quit ? '<span class="asset-tag">уволен</span>' : (j.delegated ? '<span class="asset-tag">делегировано</span>' : `<span class="asset-tag">${jobHours(j)} ч/мес</span>`);
+    h += `<div class="stmt-row"><span class="lbl">${j.name} ${tag}</span><span class="num">${fmt(inc)}</span></div>`;
+  }
+  if(overloadPenalty() < 1)
+    h += `<div class="stmt-row"><span class="lbl">Штраф за перегруз</span><span class="num neg">−${Math.round((1-overloadPenalty())*100)}%</span></div>`;
+  h += `<div class="stmt-total"><span>Активный доход</span><span>${fmt(act)}</span></div>`;
+  h += `<div class="stmt-row" style="margin-top:4px"><span class="lbl pos">Пассивный (чистый)</span><span class="num pos">${fmt(pas)}</span></div>`;
   $('#stmt-income').innerHTML = h;
 
   // Расходы
-  h = `<div class="stmt-row"><span class="lbl">Налоги</span><span class="num">${fmt(S.taxes)}</span></div>`;
-  h += `<div class="stmt-row"><span class="lbl">Прочие расходы</span><span class="num">${fmt(S.otherExpenses)}</span></div>`;
-  if(S.children > 0)
-    h += `<div class="stmt-row"><span class="lbl">На детей (${S.children})</span><span class="num">${fmt(childExpense())}</span></div>`;
+  h = '';
+  for(const k in S.expenses)
+    h += `<div class="stmt-row"><span class="lbl">${k}</span><span class="num">${fmt(Math.round(S.expenses[k]*S.inflationMult))}</span></div>`;
   for(const k in S.liabilities)
-    h += `<div class="stmt-row"><span class="lbl">${k}</span><span class="num">${fmt(S.liabilities[k].payment)}</span></div>`;
-  h += `<div class="stmt-total"><span>Итого расход</span><span>${fmt(exp)}</span></div>`;
+    if(S.liabilities[k].payment > 0)
+      h += `<div class="stmt-row"><span class="lbl">${k} (платёж)</span><span class="num">${fmt(S.liabilities[k].payment)}</span></div>`;
+  h += `<div class="stmt-total"><span>Расходы / мес</span><span>${fmt(exp)}</span></div>`;
   $('#stmt-expense').innerHTML = h;
 
-  // Активы
-  if(S.assets.length === 0){
-    $('#stmt-assets').innerHTML = `<div class="stmt-row"><span class="lbl" style="font-style:italic;color:var(--text-mut)">пока нет активов</span></div>`;
-  }else{
-    h = '';
-    for(const a of S.assets){
-      if(a.kind === 'stock'){
-        h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">${a.shares} шт × ${fmt(a.price)}</span></span><span class="num">${fmt(a.shares*a.price)}</span></div>`;
-      }else{
-        const tag = a.real ? 'своё' : (a.kind === 'realestate' ? 'аренда' : 'бизнес');
-        const val = a.cost > 0 ? fmt(a.cost) : '—';
-        h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">${tag} +${fmt(a.cashflow)}</span></span><span class="num">${val}</span></div>`;
-      }
-    }
-    $('#stmt-assets').innerHTML = h;
+  // Активы (бизнес/недвижимость + бумаги)
+  const rows = [];
+  for(const a of S.assets){
+    const net = assetMonthlyNet(a);
+    const ytag = a.real ? 'своё' : DOMAINS[a.domain] ? a.domain : a.cls;
+    const pays = { monthly:'ежемес', quarterly:'кв', semiannual:'п/г', annual:'год' }[a.payout] || '';
+    const health = (a.health!=null && a.health<1) ? ` <span class="asset-tag" style="color:var(--red)">−${Math.round((1-a.health)*100)}%</span>` : '';
+    rows.push(`<div class="stmt-row manageable" data-aid="${a.id}">
+      <span class="lbl">${a.title}${health}<br><span class="asset-tag">${ytag} · ${a.hours||0} ч · ${pays}</span></span>
+      <span class="num pos">${fmtSigned(net)}</span></div>`);
   }
+  // бумаги
+  for(const sym in (S.holdings||{})){
+    const hd = S.holdings[sym]; if(!hd || hd.shares<=0) continue;
+    const def = SECURITIES.find(x=>x.sym===sym);
+    const val = hd.shares * (S.prices[sym]||0);
+    const divM = def.dividend>0 ? Math.round(def.dividend*hd.shares/12*(1-0.13)) : 0;
+    rows.push(`<div class="stmt-row"><span class="lbl">${def.name} <span class="asset-tag">${hd.shares} шт · ${fmt(S.prices[sym]||0)}</span></span>
+      <span class="num">${fmt(val)}${divM?` <span class="pos" style="font-size:11px">${fmtSigned(divM)}</span>`:''}</span></div>`);
+  }
+  $('#stmt-assets').innerHTML = rows.length ? rows.join('') : `<div class="stmt-row"><span class="lbl" style="font-style:italic;color:var(--text-mut)">пока нет активов</span></div>`;
 
   // Пассивы
-  if(Object.keys(S.liabilities).length === 0){
-    $('#stmt-liab').innerHTML = `<div class="stmt-row"><span class="lbl" style="font-style:italic;color:var(--text-mut)">долгов нет</span></div>`;
+  h = '';
+  const liabKeys = Object.keys(S.liabilities);
+  if(liabKeys.length===0 && !S.assets.some(a=>a.debt>0)){
+    h = `<div class="stmt-row"><span class="lbl" style="font-style:italic;color:var(--text-mut)">долгов нет</span></div>`;
   }else{
-    h = '';
     for(const k in S.liabilities)
       h += `<div class="stmt-row manageable" data-liab="${k}"><span class="lbl">${k}</span><span class="num neg">${fmt(S.liabilities[k].balance)}</span></div>`;
-    // ипотеки по недвижимости (привязаны к активам — гасятся продажей объекта)
-    for(const a of S.assets){
-      if(a.debt > 0)
-        h += `<div class="stmt-row"><span class="lbl">Ипотека: ${a.title}</span><span class="num neg">${fmt(a.debt)}</span></div>`;
-    }
-    $('#stmt-liab').innerHTML = h;
+    for(const a of S.assets) if(a.debt>0)
+      h += `<div class="stmt-row"><span class="lbl">Ипотека: ${a.title}</span><span class="num neg">${fmt(a.debt)}</span></div>`;
   }
+  $('#stmt-liab').innerHTML = h;
 }
 
 /* ====================================================================
    МОДАЛКИ
    ==================================================================== */
-function openCard(html){
-  $('#card-modal').className = 'modal';   // сброс спец-классов (напр. help-modal)
-  $('#card-modal').innerHTML = html;
-  $('#card-overlay').classList.add('show');
-}
+function openCard(html){ $('#card-modal').className='modal'; $('#card-modal').innerHTML = html; $('#card-overlay').classList.add('show'); }
 function closeCard(){ $('#card-overlay').classList.remove('show'); }
-
-function dealStat(label, val, cls){
-  return `<div class="deal-stat"><div class="ds-l">${label}</div><div class="ds-v ${cls||''}">${val}</div></div>`;
+function dealStat(l,v,c){ return `<div class="deal-stat"><div class="ds-l">${l}</div><div class="ds-v ${c||''}">${v}</div></div>`; }
+function simpleModal(bc,bt,t,d,bn){
+  return `<div class="modal-head"><span class="deck-badge ${bc}">${bt}</span><h3>${t}</h3></div>
+    <div class="modal-body"><p class="deal-desc">${d}</p></div>
+    <div class="modal-foot"><button class="btn primary" id="m-ok">${bn}</button></div>`;
 }
 
-/* Индикатор качества сделки: годовая доходность на вложенные деньги + вердикт.
-   invested — наличные на входе (взнос/цена), annualCf — поток за год. */
-function yieldBadge(invested, annualCf){
-  if(annualCf <= 0){
-    return `<div class="yield-badge trap">⚠ Поток минусовой - это пассив, а не актив. Будешь кормить его из зарплаты.</div>`;
+/* индикатор доходности + времени + экспертизы */
+function dealVerdict(deal){
+  const invested = deal.cls==='realestate' ? deal.down : deal.cost;
+  const annual = deal.annualIncome;
+  let h = '';
+  if(annual <= 0){
+    h += `<div class="yield-badge trap">⚠ Поток минусовой - это пассив, а не актив. Будешь доплачивать из зарплаты.</div>`;
+  }else if(invested>0){
+    const y = Math.round(annual/invested*100);
+    let cls = y>=25?'great':y>=12?'good':'weak';
+    const verdict = y>=25?'Отличный поток':y>=12?'Хороший актив':'Слабая доходность';
+    h += `<div class="yield-badge ${cls}">Доходность ≈ <b>${y}%</b> годовых · ${verdict}</div>`;
   }
-  if(invested <= 0) return '';
-  const y = annualCf / invested;            // годовая доходность
-  const pct = Math.round(y * 100);
-  let cls, verdict;
-  if(y >= 0.25){ cls='great'; verdict='Отличный денежный поток'; }
-  else if(y >= 0.12){ cls='good'; verdict='Хороший актив'; }
-  else if(y >= 0.05){ cls='weak'; verdict='Слабая доходность - окупается долго'; }
-  else { cls='weak'; verdict='Очень слабо - почти как вклад, но с риском'; }
-  return `<div class="yield-badge ${cls}">Доходность ≈ <b>${pct}%</b> годовых на вложенное · ${verdict}</div>`;
+  // время
+  if(deal.hours > 0)
+    h += `<div class="yield-badge weak">⏳ Требует <b>${deal.hours} ч/мес</b> твоего времени${deal.manager?' (можно нанять управляющего)':''}. Это работа, не пассив.</div>`;
+  else
+    h += `<div class="yield-badge good">⏳ Времени почти не требует - настоящий пассив.</div>`;
+  // экспертиза/риск
+  if(deal.domain && deal.domain!=='биржа'){
+    const lvl = expLevel(deal.domain), f = expFactor(deal.domain);
+    const effRisk = Math.round((deal.risk||0)*f*100);
+    let rcls = effRisk>=20?'trap':effRisk>=12?'weak':'good';
+    h += `<div class="yield-badge ${rcls}">🎯 Твоя экспертиза в «${DOMAINS[deal.domain]}»: <b>${expLabel(deal.domain)}</b>. Риск для тебя ≈ ${effRisk}%/год.${lvl<=0?' Это не твоё поле - легко прогореть.':''}</div>`;
+  }
+  return h;
 }
 
 /* ====================================================================
    СОХРАНЕНИЕ
    ==================================================================== */
-function save(){
-  try{ localStorage.setItem(SAVE_KEY, JSON.stringify(S)); }catch(e){}
-}
-function loadSave(){
-  try{
-    const raw = localStorage.getItem(SAVE_KEY);
-    if(!raw) return null;
-    return JSON.parse(raw);
-  }catch(e){ return null; }
-}
+function save(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(S)); }catch(e){} }
+function loadSave(){ try{ const r=localStorage.getItem(SAVE_KEY); return r?JSON.parse(r):null; }catch(e){ return null; } }
 function clearSave(){ try{ localStorage.removeItem(SAVE_KEY); }catch(e){} }
 
 /* ====================================================================
-   СТАРТ ИГРЫ
+   СТАРТ
    ==================================================================== */
 let selectedProf = null;
 
 function renderProfGrid(){
   const grid = $('#prof-grid');
   grid.innerHTML = ALL_PROFILES.map(p => {
-    let liabPay = 0; for(const k in p.liabilities) liabPay += p.liabilities[k].payment;
-    const exp = p.taxes + p.otherExpenses + liabPay;
-    let passive = 0; (p.startAssets || []).forEach(a => passive += a.cashflow || 0);
-    const cf = p.salary + passive - exp;
+    let liab=0; for(const k in p.liabilities) liab += p.liabilities[k].payment;
+    let consumption=0; for(const k in p.expenses) consumption += p.expenses[k];
+    const exp = consumption + liab;
+    let active=0, hrs=0; for(const j of p.jobs){ active += j.income; hrs += j.hours; }
+    let pas=0; (p.startAssets||[]).forEach(a => pas += Math.round(a.annualIncome/12));
+    const cf = active + pas - exp;
     const featured = p.real ? ' featured' : '';
-    const passiveLine = passive > 0
-      ? `<div class="pc-line"><span>Пассивный</span><span class="num pc-cf">${fmt(passive)}</span></div>` : '';
     return `<button class="prof-card${featured}" data-id="${p.id}">
-      <div class="pc-name">${p.real ? '★ ' : ''}${p.name}</div>
-      <div class="pc-line"><span>${p.real ? 'Активный доход' : 'Зарплата'}</span><span class="num">${fmt(p.salary)}</span></div>
-      ${passiveLine}
+      <div class="pc-name">${p.real?'★ ':''}${p.name}</div>
+      <div class="pc-line"><span>Активный доход</span><span class="num">${fmt(active)}</span></div>
+      ${pas>0?`<div class="pc-line"><span>Пассивный</span><span class="num pc-cf">${fmt(pas)}</span></div>`:''}
       <div class="pc-line"><span>Расходы</span><span class="num">${fmt(exp)}</span></div>
-      <div class="pc-line"><span>Ден. поток</span><span class="num pc-cf">${fmtSigned(cf)}</span></div>
-      <div class="pc-line"><span>Наличные</span><span class="num">${fmt(p.cash)}</span></div>
+      <div class="pc-line"><span>Занятость</span><span class="num">${hrs} ч/мес</span></div>
+      <div class="pc-line"><span>Возраст · нал.</span><span class="num">${p.age} · ${fmtShort(p.cash)}</span></div>
     </button>`;
   }).join('');
   grid.querySelectorAll('.prof-card').forEach(card => {
@@ -279,660 +358,544 @@ function renderProfGrid(){
 
 function startGame(profId){
   const p = ALL_PROFILES.find(x => x.id === profId);
-  // стартовые активы (для профиля «Я» — уже имеющийся пассивный доход)
-  const assets = (p.startAssets || []).map((a, i) => Object.assign({ id: 'seed'+i }, a));
+  const prices = {}; SECURITIES.forEach(s => prices[s.sym] = s.price);
   S = {
     prof: p.id, name: p.name, real: !!p.real,
-    salary: p.salary, cash: p.cash,
-    children: 0, perChild: p.perChild,
-    taxes: p.taxes, otherExpenses: p.otherExpenses,
+    age: p.age, month: 0, cash: p.cash,
+    expertise: JSON.parse(JSON.stringify(p.expertise)),
+    jobs: JSON.parse(JSON.stringify(p.jobs)),
+    expenses: JSON.parse(JSON.stringify(p.expenses)),
     liabilities: JSON.parse(JSON.stringify(p.liabilities)),
-    assets: assets,
+    assets: (p.startAssets||[]).map((a,i)=>Object.assign({health:1}, a, {id:'seed'+i})),
+    holdings: {}, prices,
+    inflationMult: 1,
     position: 0, turn: 1,
-    charityTurns: 0, skipTurns: 0,
-    won: false,
-    log: [],
+    won: false, log: [],
   };
   $('#start-overlay').classList.remove('show');
   $('#game-view').style.display = 'grid';
   if(p.real){
-    log(`Старт от себя! Активный доход ${fmt(p.salary)}, пассивный ${fmt(passiveIncome())}. До выхода из крысиных бегов: ${fmt(Math.max(0,totalExpense()-passiveIncome()))}/мес пассивного потока.`, 'gold');
-  }else{
-    log(`Старт! Профессия: <b>${p.name}</b>. Цель - пассивный доход ≥ расходов (${fmt(totalExpense())}/мес).`, 'gold');
+    log(`Старт от себя, ${dateLabel()}, ${curAge()} лет. Три потока съедают почти всё время: свободно ${freeHours()} ч/мес. Чтобы заняться активами - освободи время.`, 'gold');
+  } else {
+    log(`Старт: ${p.name}, ${curAge()} лет. Цель - пассивный доход ≥ расходов.`, 'gold');
   }
   render();
 }
 
 /* ====================================================================
-   ХОД: КУБИК И ДВИЖЕНИЕ
+   ХОД = МЕСЯЦ
    ==================================================================== */
 function onRollClick(){
   if(busy) return;
-  // пропуск хода (увольнение)
-  if(S.skipTurns > 0){
-    S.skipTurns--;
-    log(`Пропуск хода (осталось пропустить: ${S.skipTurns}).`, 'bad');
-    S.turn++;
-    render();
-    return;
-  }
-  // благотворительность: выбор количества кубиков
-  if(S.charityTurns > 0){
-    chooseDiceCount();
-    return;
-  }
-  doRoll(1);
+  doRoll();
 }
-
-function chooseDiceCount(){
-  openCard(`
-    <div class="modal-head"><span class="deck-badge badge-event">бонус</span><h3>Благотворительность активна</h3></div>
-    <div class="modal-body">
-      <p class="deal-desc">Вы можете бросить 1 или 2 кубика (осталось таких ходов: ${S.charityTurns}).</p>
-    </div>
-    <div class="modal-foot">
-      <button class="btn" id="dc1">Один кубик</button>
-      <button class="btn primary" id="dc2">Два кубика</button>
-    </div>`);
-  $('#dc1').onclick = () => { closeCard(); S.charityTurns--; doRoll(1); };
-  $('#dc2').onclick = () => { closeCard(); S.charityTurns--; doRoll(2); };
-}
-
-function doRoll(diceCount){
+function doRoll(){
   busy = true; render();
-  const dice = $('#dice');
-  dice.classList.add('rolling');
-  $('#turn-hint').textContent = 'Кубик брошен...';
-
-  let d1 = 1 + rnd(6), d2 = diceCount === 2 ? 1 + rnd(6) : 0;
-  const steps = d1 + d2;
-
+  const dice = $('#dice'); dice.classList.add('rolling');
+  $('#turn-hint').textContent = 'Идёт месяц...';
+  const steps = 1 + rnd(6);
   setTimeout(() => {
     dice.classList.remove('rolling');
-    dice.textContent = diceCount === 2 ? `${d1}+${d2}` : ['','⚀','⚁','⚂','⚃','⚄','⚅'][d1];
-    log(`Бросок: <b>${steps}</b>${diceCount===2?` (${d1}+${d2})`:''}.`, 'info');
+    dice.textContent = ['','⚀','⚁','⚂','⚃','⚄','⚅'][steps];
     animateMove(steps);
-  }, 500);
+  }, 450);
 }
-
 function animateMove(steps){
-  let moved = 0;
-  const N = BOARD.length;
-  const stepOnce = () => {
+  let moved = 0; const N = BOARD.length;
+  const step = () => {
     if(moved >= steps){ arrive(); return; }
-    S.position = (S.position + 1) % N;
-    moved++;
+    S.position = (S.position + 1) % N; moved++;
     moveToken(S.position);
-    // прошли «День зарплаты» (но не финальную клетку — её обработает arrive)
-    if(moved < steps && BOARD[S.position].type === 'payday'){
-      const cf = cashflow();
-      S.cash += cf;
-      log(`Прошли День зарплаты: денежный поток ${fmtSigned(cf)}.`, cf>=0?'good':'bad');
-      renderStatementOnly();
-    }
-    setTimeout(stepOnce, 180);
+    setTimeout(step, 150);
   };
-  setTimeout(stepOnce, 180);
+  setTimeout(step, 150);
 }
-
-function renderStatementOnly(){
-  $('#m-cash').textContent = fmt(S.cash);
-}
-
 function arrive(){
-  S.turn++;
   const cell = BOARD[S.position];
   handleCell(cell);
 }
-
-/* ====================================================================
-   ОБРАБОТКА КЛЕТОК
-   ==================================================================== */
 function handleCell(cell){
   switch(cell.type){
-    case 'deal':      cellDeal(); break;
-    case 'payday':    cellPayday(); break;
-    case 'doodad':    cellDoodad(); break;
-    case 'market':    cellMarket(); break;
-    case 'charity':   cellCharity(); break;
-    case 'baby':      cellBaby(); break;
-    case 'downsized': cellDownsized(); break;
-    default:          endTurn();
+    case 'deal':   cellDeal(); break;
+    case 'market': cellMarket(); break;
+    case 'life':   cellLife(); break;
+    case 'doodad': cellDoodad(); break;
+    default:       endTurn();
   }
 }
 
+/* конец хода: расчёт месяца (доходы/расходы/выплаты/инфляция/возраст/риск) */
 function endTurn(){
+  settleMonth();
   busy = false;
-  $('#turn-hint').textContent = 'Ваш ход. Бросьте кубик.';
+  $('#turn-hint').textContent = 'Ваш ход. Бросьте кубик (= следующий месяц).';
   render();
   checkWin();
 }
 
-/* ---------- Зарплата ---------- */
-function cellPayday(){
-  const cf = cashflow();
-  S.cash += cf;
-  log(`День зарплаты! Денежный поток ${fmtSigned(cf)}.`, cf>=0?'good':'bad');
+function settleMonth(){
+  const m = curMonthIdx();
+  let delta = 0;
+  // активный доход
+  delta += activeIncomeNet();
+  // выплаты по активам (с учётом простоя недвижимости)
+  for(const a of S.assets){
+    const due = assetPayoutThisMonth(a, m);
+    delta += due;
+  }
+  // дивиденды по бумагам
+  delta += securitiesPayoutThisMonth(m);
+  // расходы
+  delta -= expensesMonthly();
+  S.cash += Math.round(delta);
+
+  // дрейф цен бумаг
+  driftPrices();
+  // инфляция
+  S.inflationMult *= (1 + CONFIG.monthlyInflation);
+  // время идёт
+  S.month++; S.turn++;
+  // годовой обзор бизнеса (раз в 12 месяцев) + выгорание
+  if(S.month % 12 === 0) yearlyReview();
+  burnoutTick();
+}
+
+function assetPayoutThisMonth(a, m){
+  const incNetAnnual = a.annualIncome * (a.health==null?1:a.health) * (1 - taxOf(a));
+  if(a.annualIncome <= 0){ // минусовой поток (ловушка) - списываем равномерно
+    return Math.round(a.annualIncome/12 * (a.health==null?1:a.health));
+  }
+  if(a.cls === 'realestate'){
+    // помесячно, но возможен простой
+    if(Math.random() < (a.vacancy||0)){
+      if(Math.random()<0.5) log(`Простой аренды: «${a.title}» в этом месяце пустует.`, 'bad');
+      return 0;
+    }
+    return Math.round(incNetAnnual/12);
+  }
+  // бизнес/бумага-актив по расписанию
+  const map = { monthly:[0,1,2,3,4,5,6,7,8,9,10,11], quarterly:[2,5,8,11], semiannual:[5,11], annual:[11] };
+  const months = a.payMonths || map[a.payout] || map.monthly;
+  if(months.indexOf(m) === -1) return 0;
+  return Math.round(incNetAnnual / months.length);
+}
+function securitiesPayoutThisMonth(m){
+  let s = 0;
+  for(const sym in (S.holdings||{})){
+    const def = SECURITIES.find(x=>x.sym===sym); const hd = S.holdings[sym];
+    if(!def || !hd || hd.shares<=0 || !def.dividend) continue;
+    const months = def.payMonths === 'all' ? [0,1,2,3,4,5,6,7,8,9,10,11] : (def.payMonths||[]);
+    if(months.indexOf(m) === -1) continue;
+    const pay = def.dividend * hd.shares / months.length * (1 - CONFIG.tax.dividend);
+    s += pay;
+    if(pay > 0) log(`Выплата по «${def.name}»: ${fmtSigned(Math.round(pay))}.`, 'good');
+  }
+  return Math.round(s);
+}
+function driftPrices(){
+  for(const def of SECURITIES){
+    const v = def.vol || 0.1;
+    const change = (Math.random()-0.48) * v * 0.5;   // лёгкий дрейф с небольшим уклоном вверх
+    S.prices[def.sym] = Math.max(def.price*0.3, Math.round((S.prices[def.sym]||def.price) * (1+change)));
+  }
+}
+function yearlyReview(){
+  for(const a of S.assets){
+    if(a.cls !== 'business' || a.real) continue;
+    const effRisk = (a.risk||0) * expFactor(a.domain);
+    if(Math.random() < effRisk){
+      if(Math.random() < 0.15){ // редкий крах
+        log(`💥 Бизнес «${a.title}» прогорел - актив потерян. Поток ${fmt(assetMonthlyNet(a))}/мес ушёл.`, 'bad');
+        a._dead = true;
+      } else {
+        a.health = Math.max(0.4, (a.health||1) - 0.3);
+        log(`Тяжёлый год у «${a.title}»: доход просел (здоровье ${Math.round(a.health*100)}%).`, 'bad');
+      }
+    } else if((a.health||1) < 1){
+      a.health = Math.min(1, (a.health||1) + 0.2);
+    }
+  }
+  S.assets = S.assets.filter(a => !a._dead);
+}
+function burnoutTick(){
+  const ov = overload();
+  if(ov > 0 && Math.random() < CONFIG.burnoutEventChancePer10h * (ov/10)){
+    const cost = 30000 + rnd(60000);
+    S.cash -= cost;
+    log(`😮‍💨 Выгорание от перегруза: лечение/срыв сделки -${fmt(cost)}. Освободи время!`, 'bad');
+  }
+}
+
+/* ====================================================================
+   КЛЕТКА «СДЕЛКА» — выбор бизнес/недвижимость, затем карточка
+   ==================================================================== */
+function cellDeal(){
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-big">возможность</span><h3>Подвернулась сделка</h3></div>
+    <div class="modal-body">
+      <p class="deal-desc">К тебе пришла возможность. Хорошие сделки редки и требуют разбора - смотри на доходность, ВРЕМЯ и свою экспертизу, прежде чем влезать.</p>
+      <div class="deal-stats">${dealStat('Бизнес','💼 поток + время')}${dealStat('Недвижимость','🏠 аренда')}</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="deal-skip">Пропустить месяц</button>
+      <button class="btn" id="deal-re">Недвижимость</button>
+      <button class="btn primary" id="deal-biz">Бизнес</button>
+    </div>`);
+  $('#deal-skip').onclick = () => { closeCard(); endTurn(); };
+  $('#deal-biz').onclick = () => showDeal(Object.assign({cls:'business'}, pick(BUSINESS_DEALS)));
+  $('#deal-re').onclick  = () => showDeal(Object.assign({cls:'realestate'}, pick(REALESTATE_DEALS)));
+}
+
+function showDeal(deal){
+  const invested = deal.cls==='realestate' ? deal.down : deal.cost;
+  const canBuy = S.cash >= invested;
+  const annM = Math.round(deal.annualIncome/12);
+  let stats = dealStat(deal.cls==='realestate'?'Взнос/нал':'Вход', fmt(invested));
+  if(deal.cls==='realestate' && deal.mortgage>0) stats += dealStat('Ипотека', fmt(deal.mortgage), 'neg');
+  stats += dealStat('Поток ~/мес', fmtSigned(annM), annM>=0?'pos':'neg');
+  stats += dealStat('Время', (deal.hours||0)+' ч/мес');
+
+  openCard(`
+    <div class="modal-head"><span class="deck-badge ${deal.cls==='realestate'?'badge-market':'badge-big'}">${deal.cls==='realestate'?'недвижимость':'бизнес'}</span><h3>${deal.title}</h3></div>
+    <div class="modal-body">
+      <p class="deal-sub">${deal.sub||''}</p>
+      <div class="deal-stats">${stats}</div>
+      ${dealVerdict(deal)}
+      <p class="deal-desc">${deal.desc}</p>
+      ${freeHours() < (deal.hours||0) && deal.hours>0 ? `<p class="modal-note" style="color:var(--red)">У тебя свободно лишь ${freeHours()} ч/мес, а нужно ${deal.hours}. Возьмёшь - уйдёшь в перегруз${deal.manager?', или наймёшь управляющего':''}.</p>` : ''}
+    </div>
+    <div class="modal-foot">
+      <span class="modal-note">${canBuy?'':'Не хватает наличных'}</span>
+      <button class="btn ghost" id="d-skip">Отказаться</button>
+      ${deal.manager && deal.hours>0 ? `<button class="btn" id="d-mgr" ${canBuy?'':'disabled'}>С управляющим</button>` : ''}
+      <button class="btn primary" id="d-buy" ${canBuy?'':'disabled'}>Купить сам</button>
+    </div>`);
+  $('#d-skip').onclick = () => { closeCard(); log(`Отказ: ${deal.title}.`, ''); endTurn(); };
+  $('#d-buy').onclick = () => buyDeal(deal, false);
+  if(deal.manager && deal.hours>0) $('#d-mgr').onclick = () => buyDeal(deal, true);
+}
+
+function buyDeal(deal, withManager){
+  const invested = deal.cls==='realestate' ? deal.down : deal.cost;
+  if(S.cash < invested) return;
+  S.cash -= invested;
+  let annualIncome = deal.annualIncome;
+  let hours = deal.hours || 0;
+  if(withManager && deal.manager){ hours = deal.manager.hours; annualIncome = Math.round(annualIncome * deal.manager.factor); }
+  let health = 1;
+  // «лимон»: проверка качества бизнеса с учётом экспертизы
+  if(deal.cls==='business' && deal.lemon){
+    const lemonChance = deal.lemon * expFactor(deal.domain);
+    if(Math.random() < lemonChance){
+      health = 0.45;
+      log(`Сделка «${deal.title}» оказалась «лимоном»: реальный доход вдвое ниже обещанного. ${expLevel(deal.domain)<=1?'В чужом домене такое не разглядеть.':''}`, 'bad');
+    }
+  }
+  const a = {
+    id: 'a'+Date.now()+rnd(999),
+    title: deal.title, sub: deal.sub, cls: deal.cls, domain: deal.domain,
+    cost: deal.cls==='realestate'?deal.cost:deal.cost, debt: deal.mortgage||0,
+    annualIncome, payout: deal.cls==='realestate'?'monthly':'monthly',
+    hours, vacancy: deal.vacancy||0, risk: deal.risk||0, health,
+    managed: !!withManager,
+  };
+  S.assets.push(a);
+  log(`Куплено: <b>${deal.title}</b> за ${fmt(invested)}${withManager?' (с управляющим)':''}. Поток ~${fmtSigned(assetMonthlyNet(a))}/мес, время ${hours} ч/мес.`, 'good');
+  closeCard(); endTurn();
+}
+
+/* ====================================================================
+   КЛЕТКА «РЫНОК» — новость двигает цену бумаги
+   ==================================================================== */
+function cellMarket(){
+  const news = pick(MARKET_NEWS);
+  const old = S.prices[news.sym] || SECURITIES.find(s=>s.sym===news.sym).price;
+  S.prices[news.sym] = Math.round(old * news.factor);
+  const def = SECURITIES.find(s=>s.sym===news.sym);
+  const owned = (S.holdings[news.sym]||{}).shares || 0;
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-market">рынок</span><h3>${news.title}</h3></div>
+    <div class="modal-body">
+      <p class="deal-desc">${news.desc}</p>
+      <div class="deal-stats">${dealStat(def.name, fmt(S.prices[news.sym]))}${dealStat('Было', fmt(old))}${dealStat('У тебя', owned?owned+' шт':'—')}</div>
+      <p class="modal-note">Торговать можно в любой момент через «Биржу» (кнопка внизу).</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="mk-broker">Открыть биржу</button>
+      <button class="btn primary" id="mk-ok">Дальше</button>
+    </div>`);
+  $('#mk-ok').onclick = () => { closeCard(); endTurn(); };
+  $('#mk-broker').onclick = () => { closeCard(); endTurn(); openBroker(); };
+}
+
+/* ====================================================================
+   КЛЕТКА «ЖИЗНЬ» — события
+   ==================================================================== */
+function cellLife(){
+  const e = pick(LIFE_EVENTS);
+  if(e.kind === 'cash'){
+    const amt = e.amount * e.sign;
+    openCard(simpleModal(e.sign>0?'badge-small':'badge-doodad', 'жизнь', e.title, e.desc + `<br><br><b>${fmtSigned(amt)}</b>`, e.sign>0?'Забрать':'Оплатить'));
+    $('#m-ok').onclick = () => { S.cash += amt; log(`${e.title}: ${fmtSigned(amt)}.`, e.sign>0?'good':'bad'); closeCard(); endTurn(); };
+    return;
+  }
+  if(e.kind === 'health'){
+    openCard(simpleModal('badge-doodad','здоровье', e.title, e.desc + `<br><br>Лечение −${fmt(e.amount)}.`, 'Ох'));
+    $('#m-ok').onclick = () => { S.cash -= e.amount; log(`${e.title}: −${fmt(e.amount)}.`, 'bad'); closeCard(); endTurn(); };
+    return;
+  }
+  if(e.kind === 'expertise'){
+    const can = S.cash >= e.amount;
+    openCard(`<div class="modal-head"><span class="deck-badge badge-event">развитие</span><h3>${e.title}</h3></div>
+      <div class="modal-body"><p class="deal-desc">${e.desc}</p>
+        <div class="deal-stats">${dealStat('Стоимость', fmt(e.amount), 'neg')}${dealStat('Навык', DOMAINS[e.domain])}</div></div>
+      <div class="modal-foot"><button class="btn ghost" id="ex-no">Потом</button>
+        <button class="btn primary" id="ex-yes" ${can?'':'disabled'}>Пройти курс</button></div>`);
+    $('#ex-no').onclick = () => { closeCard(); endTurn(); };
+    $('#ex-yes').onclick = () => { S.cash -= e.amount; S.expertise[e.domain] = clamp((S.expertise[e.domain]||0)+1,0,3);
+      log(`Прокачал навык «${DOMAINS[e.domain]}» до уровня «${expLabel(e.domain)}».`, 'gold'); closeCard(); endTurn(); };
+    return;
+  }
+  if(e.kind === 'job_offer'){
+    openCard(`<div class="modal-head"><span class="deck-badge badge-event">работа</span><h3>${e.title}</h3></div>
+      <div class="modal-body"><p class="deal-desc">${e.desc}</p>
+        <div class="deal-stats">${dealStat('Доход', fmtSigned(e.income), 'pos')}${dealStat('Время', '+'+e.hours+' ч/мес', 'neg')}</div>
+        <p class="modal-note">Свободно сейчас ${freeHours()} ч/мес.</p></div>
+      <div class="modal-foot"><button class="btn ghost" id="jo-no">Отказаться</button>
+        <button class="btn primary" id="jo-yes">Взять подработку</button></div>`);
+    $('#jo-no').onclick = () => { closeCard(); endTurn(); };
+    $('#jo-yes').onclick = () => { S.jobs.push({id:'gig'+S.month,name:e.title,income:e.income,hours:e.hours,kind:'подработка',canQuit:true});
+      log(`Взял подработку «${e.title}»: +${fmt(e.income)}, +${e.hours} ч/мес.`, ''); closeCard(); endTurn(); };
+    return;
+  }
+  if(e.kind === 'market_crash'){
+    for(const def of SECURITIES) S.prices[def.sym] = Math.round((S.prices[def.sym]||def.price) * (0.6 + Math.random()*0.15));
+    openCard(simpleModal('badge-doodad','рынок', e.title, e.desc + '<br><br>Все акции и фонды резко подешевели. У кого было плечо - больно; у кого кэш - время покупать.', 'Понятно'));
+    $('#m-ok').onclick = () => { log('Обвал на бирже: бумаги подешевели.', 'bad'); closeCard(); endTurn(); };
+    return;
+  }
+  if(e.kind === 'rate_cut'){
+    openCard(simpleModal('badge-small','ЦБ', e.title, e.desc, 'Ок'));
+    $('#m-ok').onclick = () => { log('ЦБ снизил ставку.', 'info'); closeCard(); endTurn(); };
+    return;
+  }
   endTurn();
 }
 
-/* ---------- Сделка: выбор малая/крупная ---------- */
-function cellDeal(){
-  openCard(`
-    <div class="modal-head"><span class="deck-badge badge-big">сделка</span><h3>Возможность для сделки</h3></div>
-    <div class="modal-body">
-      <p class="deal-desc">Выберите колоду. Малые сделки - дёшево, небольшой поток. Крупные - дорого, но мощный поток.</p>
-      <div class="deal-stats">
-        ${dealStat('Малая сделка','💼 дёшево')}
-        ${dealStat('Крупная сделка','🏢 дорого')}
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn ghost" id="deal-skip">Пропустить ход</button>
-      <button class="btn" id="deal-small">Малая</button>
-      <button class="btn primary" id="deal-big">Крупная</button>
-    </div>`);
-  $('#deal-skip').onclick = () => { closeCard(); log('Сделка пропущена.', ''); endTurn(); };
-  $('#deal-small').onclick = () => showDeal(pick(SMALL_DEALS), 'small');
-  $('#deal-big').onclick   = () => showDeal(pick(BIG_DEALS), 'big');
-}
-
-function showDeal(deal, size){
-  const badge = size === 'small'
-    ? '<span class="deck-badge badge-small">малая сделка</span>'
-    : '<span class="deck-badge badge-big">крупная сделка</span>';
-
-  if(deal.kind === 'stock') return showStockDeal(deal, badge);
-
-  // недвижимость / бизнес
-  const canBuy = S.cash >= deal.down;
-  let stats = dealStat('Первый взнос', fmt(deal.down));
-  stats += dealStat('Полная цена', fmt(deal.cost));
-  if(deal.mortgage > 0) stats += dealStat('Ипотека', fmt(deal.mortgage), 'neg');
-  stats += dealStat('Поток / мес', fmtSigned(deal.cashflow), 'pos');
-
-  openCard(`
-    <div class="modal-head">${badge}<h3>${deal.title}</h3></div>
-    <div class="modal-body">
-      <p class="deal-sub">${deal.sub}</p>
-      <div class="deal-stats">${stats}</div>
-      ${yieldBadge(deal.down, deal.cashflow * 12)}
-      <p class="deal-desc">${deal.desc}</p>
-    </div>
-    <div class="modal-foot">
-      <span class="modal-note">${canBuy ? 'Наличных хватает' : 'Не хватает наличных на взнос'}</span>
-      <button class="btn ghost" id="d-skip">Отказаться</button>
-      <button class="btn primary" id="d-buy" ${canBuy?'':'disabled'}>Купить за ${fmt(deal.down)}</button>
-    </div>`);
-  $('#d-skip').onclick = () => { closeCard(); log(`Отказ: ${deal.title}.`, ''); endTurn(); };
-  $('#d-buy').onclick = () => {
-    S.cash -= deal.down;
-    S.assets.push({
-      id: 'a'+Date.now()+rnd(999),
-      kind: deal.kind, title: deal.title,
-      cost: deal.cost, debt: deal.mortgage || 0, cashflow: deal.cashflow,
-    });
-    log(`Куплено: <b>${deal.title}</b> за ${fmt(deal.down)}. Поток ${fmtSigned(deal.cashflow)}/мес.`, 'good');
-    closeCard(); endTurn();
-  };
-}
-
-function showStockDeal(deal, badge){
-  const owned = S.assets.find(a => a.symbol === deal.symbol);
-  const divLine = deal.dividend > 0 ? `Дивиденд ${fmt(deal.dividend)}/акция в мес` : 'Без дивидендов (спекуляция)';
-  openCard(`
-    <div class="modal-head">${badge}<h3>${deal.title}</h3></div>
-    <div class="modal-body">
-      <p class="deal-sub">${deal.sub} · ${deal.symbol}</p>
-      <div class="deal-stats">
-        ${dealStat('Цена за акцию', fmt(deal.price))}
-        ${dealStat('Дивиденд', deal.dividend>0?fmt(deal.dividend):'—', 'pos')}
-      </div>
-      ${deal.dividend > 0 ? yieldBadge(deal.price, deal.dividend * 12) : '<div class="yield-badge weak">Без дивидендов: заработок только на перепродаже дороже. Потока нет.</div>'}
-      <p class="deal-desc">${deal.desc} ${divLine}.</p>
-      <div class="qty-row">
-        <label>Сколько акций:</label>
-        <input type="number" id="qty" value="100" min="1" step="1">
-        <span id="qty-cost" style="font-family:var(--mono)"></span>
-      </div>
-      ${owned ? `<p class="modal-note">У вас уже есть ${owned.shares} шт по ${fmt(owned.price)}.</p>` : ''}
-    </div>
-    <div class="modal-foot">
-      <span class="modal-note" id="stock-note"></span>
-      <button class="btn ghost" id="s-skip">Отказаться</button>
-      <button class="btn primary" id="s-buy">Купить</button>
-    </div>`);
-
-  const qty = $('#qty'), note = $('#stock-note'), costEl = $('#qty-cost');
-  const upd = () => {
-    const n = Math.max(0, parseInt(qty.value) || 0);
-    const cost = n * deal.price;
-    costEl.textContent = '= ' + fmt(cost);
-    const ok = n > 0 && cost <= S.cash;
-    note.textContent = cost > S.cash ? 'Не хватает наличных' : '';
-    $('#s-buy').disabled = !ok;
-  };
-  qty.addEventListener('input', upd); upd();
-
-  $('#s-skip').onclick = () => { closeCard(); log(`Отказ: акции ${deal.symbol}.`, ''); endTurn(); };
-  $('#s-buy').onclick = () => {
-    const n = Math.max(0, parseInt(qty.value) || 0);
-    const cost = n * deal.price;
-    if(n <= 0 || cost > S.cash) return;
-    S.cash -= cost;
-    const ex = S.assets.find(a => a.symbol === deal.symbol);
-    if(ex){
-      // усреднение цены
-      const totalShares = ex.shares + n;
-      ex.price = Math.round((ex.price*ex.shares + deal.price*n) / totalShares);
-      ex.shares = totalShares;
-    }else{
-      S.assets.push({ id:'a'+Date.now()+rnd(999), kind:'stock', title:deal.title,
-        symbol:deal.symbol, shares:n, price:deal.price, dividend:deal.dividend||0 });
-    }
-    log(`Куплено ${n} акций <b>${deal.symbol}</b> за ${fmt(cost)}.`, 'good');
-    closeCard(); endTurn();
-  };
-}
-
-/* ---------- Всякая всячина ---------- */
+/* ====================================================================
+   КЛЕТКА «ТРАТЫ»
+   ==================================================================== */
 function cellDoodad(){
   const card = pick(DOODAD_CARDS);
-  const needLoan = S.cash < card.amount;
-  let loanAmt = 0;
-  if(needLoan){ loanAmt = Math.ceil((card.amount - S.cash)/1000)*1000; }
+  const amount = Math.round(card.amount * S.inflationMult);
+  const needLoan = S.cash < amount;
+  const loanAmt = needLoan ? Math.ceil((amount - S.cash)/1000)*1000 : 0;
   openCard(`
-    <div class="modal-head"><span class="deck-badge badge-doodad">всякая всячина</span><h3>${card.title}</h3></div>
-    <div class="modal-body">
-      <p class="deal-desc">${card.desc}</p>
-      <div class="deal-stats">${dealStat('К оплате', fmt(card.amount), 'neg')}${dealStat('Наличные', fmt(S.cash))}</div>
-      ${needLoan ? `<p class="modal-note" style="color:var(--red)">Наличных не хватает - придётся взять кредит ${fmt(loanAmt)} (платёж +${fmt(Math.round(loanAmt*LOAN_RATE))}/мес).</p>` : ''}
-    </div>
-    <div class="modal-foot">
-      <button class="btn primary" id="dd-pay">${needLoan?'Взять кредит и оплатить':'Оплатить'}</button>
-    </div>`);
-  $('#dd-pay').onclick = () => {
-    if(needLoan){ takeBankLoan(loanAmt, true); }
-    S.cash -= card.amount;
-    log(`Непредвиденный расход: <b>${card.title}</b> ${fmt(card.amount)}.`, 'bad');
-    closeCard(); endTurn();
-  };
+    <div class="modal-head"><span class="deck-badge badge-doodad">траты</span><h3>${card.title}</h3></div>
+    <div class="modal-body"><p class="deal-desc">${card.desc}</p>
+      <div class="deal-stats">${dealStat('К оплате', fmt(amount), 'neg')}${dealStat('Наличные', fmt(S.cash))}</div>
+      ${needLoan?`<p class="modal-note" style="color:var(--red)">Не хватает - кредит ${fmt(loanAmt)} (платёж +${fmt(Math.round(loanAmt*LOAN_RATE))}/мес).</p>`:''}</div>
+    <div class="modal-foot"><button class="btn primary" id="dd-pay">${needLoan?'Кредит и оплатить':'Оплатить'}</button></div>`);
+  $('#dd-pay').onclick = () => { if(needLoan) takeBankLoan(loanAmt,true); S.cash -= amount; log(`Трата: <b>${card.title}</b> −${fmt(amount)}.`, 'bad'); closeCard(); endTurn(); };
 }
 
-/* ---------- Рынок ---------- */
-function cellMarket(){
-  const card = pick(MARKET_CARDS);
-
-  if(card.type === 'nothing'){
-    openCard(simpleModal('badge-market','рынок', card.title, card.desc, 'Ясно'));
-    $('#m-ok').onclick = () => { closeCard(); log('Рынок: затишье.', ''); endTurn(); };
-    return;
-  }
-
-  if(card.type === 'bonus'){
-    openCard(`
-      <div class="modal-head"><span class="deck-badge badge-small">удача</span><h3>${card.title}</h3></div>
-      <div class="modal-body"><p class="deal-desc">${card.desc}</p>
-        <div class="deal-stats">${dealStat('Приток', fmtSigned(card.amount), 'pos')}</div></div>
-      <div class="modal-foot"><button class="btn primary" id="m-ok">Забрать ${fmt(card.amount)}</button></div>`);
-    $('#m-ok').onclick = () => {
-      S.cash += card.amount;
-      log(`Приятный сюрприз: <b>${card.title}</b> ${fmtSigned(card.amount)}.`, 'good');
-      closeCard(); endTurn();
-    };
-    return;
-  }
-
-  if(card.type === 'stock_price'){
-    S.marketPrices = S.marketPrices || {};
-    S.marketPrices[card.symbol] = card.newPrice;
-    const owned = S.assets.find(a => a.symbol === card.symbol);
-    let body = `<p class="deal-desc">${card.desc}</p>`;
-    body += `<div class="deal-stats">${dealStat('Текущая цена', fmt(card.newPrice))}${dealStat('Вы держите', owned?`${owned.shares} шт`:'—')}</div>`;
-    let foot = '';
-    if(owned){
-      const total = owned.shares * card.newPrice;
-      foot = `<span class="modal-note">Продажа всего пакета: ${fmt(total)}</span>
-        <button class="btn ghost" id="mk-skip">Держать</button>
-        <button class="btn primary" id="mk-sell">Продать всё за ${fmt(total)}</button>`;
-    }else{
-      foot = `<button class="btn primary" id="mk-skip">Ясно</button>`;
-    }
-    openCard(`<div class="modal-head"><span class="deck-badge badge-market">рынок</span><h3>${card.title}</h3></div>
-      <div class="modal-body">${body}</div><div class="modal-foot">${foot}</div>`);
-    if($('#mk-skip')) $('#mk-skip').onclick = () => { closeCard(); endTurn(); };
-    if($('#mk-sell')) $('#mk-sell').onclick = () => {
-      const total = owned.shares * card.newPrice;
-      S.cash += total;
-      S.assets = S.assets.filter(a => a !== owned);
-      log(`Продано ${owned.shares} акций <b>${card.symbol}</b> за ${fmt(total)}.`, 'good');
-      closeCard(); endTurn();
-    };
-    return;
-  }
-
-  // sell_type: покупатель на актив определённого типа
-  const matches = S.assets.filter(a => a.kind === card.assetKind);
-  if(matches.length === 0){
-    const kindName = card.assetKind === 'realestate' ? 'недвижимости' : 'бизнеса';
-    openCard(simpleModal('badge-market','рынок', card.title,
-      `${card.desc}<br><br>Но у вас нет ${kindName} для продажи.`, 'Жаль'));
-    $('#m-ok').onclick = () => { closeCard(); endTurn(); };
-    return;
-  }
-  // список активов на продажу
-  let rows = matches.map((a,i) => {
-    const salePrice = Math.round(a.cost * card.profitFactor);
-    const net = salePrice - (a.debt||0);
-    return `<div class="deal-stat" style="grid-column:span 2; display:flex; justify-content:space-between; align-items:center">
-      <div><div class="ds-l">${a.title}</div><div class="ds-v">цена ${fmt(salePrice)} → на руки ${fmt(net)}</div></div>
-      <button class="btn sm primary" data-sell="${i}">Продать</button>
+/* ====================================================================
+   БИРЖА — торговля бумагами в любой момент
+   ==================================================================== */
+function openBroker(){
+  if(busy) return;
+  const rows = SECURITIES.map(def => {
+    const price = S.prices[def.sym] || def.price;
+    const hd = S.holdings[def.sym] || {shares:0};
+    const yld = def.dividend>0 ? Math.round(def.dividend/price*100) : 0;
+    const pays = { monthly:'ежемес', quarterly:'кв', semiannual:'2/год', annual:'год', none:'—' }[def.payout];
+    return `<div class="brk-row">
+      <div class="brk-info">
+        <div class="brk-name">${def.name} <span class="asset-tag">${def.kind}</span></div>
+        <div class="brk-sub">${fmt(price)} · ${yld?('див '+yld+'% '+pays):'без дивидендов'} · риск ${Math.round((def.risk||0)*100)}%</div>
+        ${hd.shares>0?`<div class="brk-own">в портфеле: ${hd.shares} шт на ${fmt(hd.shares*price)}</div>`:''}
+      </div>
+      <div class="brk-act">
+        <input type="number" class="brk-qty" data-sym="${def.sym}" value="0" min="0" step="1">
+        <button class="btn sm primary brk-buy" data-sym="${def.sym}">Купить</button>
+        ${hd.shares>0?`<button class="btn sm brk-sell" data-sym="${def.sym}">Продать</button>`:''}
+      </div>
     </div>`;
   }).join('');
-  openCard(`<div class="modal-head"><span class="deck-badge badge-market">рынок</span><h3>${card.title}</h3></div>
-    <div class="modal-body"><p class="deal-desc">${card.desc} Премия к цене: ×${card.profitFactor}.</p>
-    <div class="deal-stats">${rows}</div></div>
-    <div class="modal-foot"><button class="btn ghost" id="mk-hold">Ничего не продавать</button></div>`);
-  $('#mk-hold').onclick = () => { closeCard(); log('Рынок: оставили активы.', ''); endTurn(); };
-  $('#card-modal').querySelectorAll('[data-sell]').forEach(btn => {
-    btn.onclick = () => {
-      const a = matches[parseInt(btn.dataset.sell)];
-      const salePrice = Math.round(a.cost * card.profitFactor);
-      const net = salePrice - (a.debt||0);
-      S.cash += net;
-      S.assets = S.assets.filter(x => x !== a);
-      log(`Продано: <b>${a.title}</b> за ${fmt(salePrice)} (на руки ${fmt(net)}, поток -${fmt(a.cashflow)}).`, 'good');
-      closeCard(); endTurn();
-    };
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-market">биржа</span><h3>Биржа · наличные ${fmt(S.cash)}</h3></div>
+    <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+      <p class="modal-note">Покупай и продавай в любой момент, любым объёмом. Дивиденды приходят по расписанию (год/квартал/мес). С дохода - налог 13%.</p>
+      ${rows}
+    </div>
+    <div class="modal-foot"><button class="btn primary" id="brk-close">Закрыть</button></div>`);
+  $('#card-modal').classList.add('broker-modal');
+  $('#brk-close').onclick = () => closeCard();
+  const qty = (sym) => Math.max(0, parseInt($(`.brk-qty[data-sym="${sym}"]`).value)||0);
+  $('#card-modal').querySelectorAll('.brk-buy').forEach(b => b.onclick = () => {
+    const sym=b.dataset.sym, n=qty(sym), price=S.prices[sym]||0, cost=n*price;
+    if(n<=0) return;
+    if(cost>S.cash){ log('Не хватает наличных на покупку.', ''); return; }
+    S.cash -= cost;
+    const hd = S.holdings[sym] || {shares:0, avg:price};
+    hd.avg = hd.shares>0 ? Math.round((hd.avg*hd.shares + price*n)/(hd.shares+n)) : price;
+    hd.shares += n; S.holdings[sym]=hd;
+    log(`Куплено ${n} × ${sym} за ${fmt(cost)}.`, 'good');
+    render(); openBroker();
+  });
+  $('#card-modal').querySelectorAll('.brk-sell').forEach(b => b.onclick = () => {
+    const sym=b.dataset.sym, hd=S.holdings[sym]; if(!hd) return;
+    const n=Math.min(hd.shares, qty(sym)||hd.shares), price=S.prices[sym]||0;
+    if(n<=0) return;
+    S.cash += n*price; hd.shares -= n;
+    if(hd.shares<=0) delete S.holdings[sym];
+    log(`Продано ${n} × ${sym} за ${fmt(n*price)}.`, 'good');
+    render(); openBroker();
   });
 }
 
-/* ---------- Благотворительность ---------- */
-function cellCharity(){
-  const donation = Math.round(totalIncome() * 0.10);
-  const canAfford = S.cash >= donation;
+/* ====================================================================
+   РАБОТЫ — уволиться / делегировать
+   ==================================================================== */
+function openJobs(){
+  if(busy) return;
+  const free = freeHours();
+  const rows = S.jobs.map((j,i) => {
+    if(j.quit) return `<div class="brk-row"><div class="brk-info"><div class="brk-name">${j.name} <span class="asset-tag">уволен</span></div></div></div>`;
+    let btns = '';
+    if(j.delegate && !j.delegated) btns += `<button class="btn sm" data-deleg="${i}">${j.delegate.label||'Делегировать'}</button>`;
+    if(j.canQuit) btns += `<button class="btn sm danger" data-quit="${i}">Уволиться</button>`;
+    return `<div class="brk-row">
+      <div class="brk-info"><div class="brk-name">${j.name}</div>
+        <div class="brk-sub">${fmt(jobIncome(j))} · ${jobHours(j)} ч/мес · ${j.kind}${j.delegated?' · делегировано':''}</div>
+        ${j.note?`<div class="brk-own">${j.note}</div>`:''}</div>
+      <div class="brk-act">${btns}</div></div>`;
+  }).join('');
+  const freedomNote = isFree()
+    ? '<p class="yield-badge great">Ты финансово свободен: пассивный доход покрывает расходы. Можешь смело уходить с работы и освободить время для активов.</p>'
+    : `<p class="yield-badge weak">Пока пассивный доход НЕ покрывает расходы. Уволишься - просядет денежный поток. Свободно ${free} ч/мес.</p>`;
   openCard(`
-    <div class="modal-head"><span class="deck-badge badge-event">благотворительность</span><h3>Помочь нуждающимся?</h3></div>
-    <div class="modal-body">
-      <p class="deal-desc">Пожертвуйте 10% дохода - и следующие 3 хода сможете бросать 1 или 2 кубика на выбор (быстрее двигаетесь).</p>
-      <div class="deal-stats">${dealStat('Пожертвование', fmt(donation), 'neg')}${dealStat('Наличные', fmt(S.cash))}</div>
-      ${canAfford?'':'<p class="modal-note" style="color:var(--red)">Недостаточно наличных.</p>'}
+    <div class="modal-head"><span class="deck-badge badge-event">работы и время</span><h3>Работы · свободно ${free} ч/мес</h3></div>
+    <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+      ${freedomNote}
+      ${rows}
     </div>
-    <div class="modal-foot">
-      <button class="btn ghost" id="ch-no">Отказаться</button>
-      <button class="btn primary" id="ch-yes" ${canAfford?'':'disabled'}>Пожертвовать ${fmt(donation)}</button>
-    </div>`);
-  $('#ch-no').onclick = () => { closeCard(); log('Благотворительность: отказ.', ''); endTurn(); };
-  $('#ch-yes').onclick = () => {
-    S.cash -= donation; S.charityTurns = 3;
-    log(`Пожертвовано ${fmt(donation)}. 3 хода - выбор 1/2 кубика.`, 'gold');
-    closeCard(); endTurn();
-  };
+    <div class="modal-foot"><button class="btn primary" id="jobs-close">Закрыть</button></div>`);
+  $('#card-modal').classList.add('broker-modal');
+  $('#jobs-close').onclick = () => closeCard();
+  $('#card-modal').querySelectorAll('[data-quit]').forEach(b => b.onclick = () => {
+    const j = S.jobs[parseInt(b.dataset.quit)];
+    if(!confirm(`Уволиться с «${j.name}»? Потеряешь ${fmt(jobIncome(j))}/мес, но освободишь ${jobHours(j)} ч.`)) return;
+    j.quit = true; log(`Уволился с «${j.name}»: −${fmt(jobIncome(j))}/мес, +${jobHours(j)} ч свободного времени.`, isFree()?'gold':'bad');
+    render(); openJobs();
+  });
+  $('#card-modal').querySelectorAll('[data-deleg]').forEach(b => b.onclick = () => {
+    const j = S.jobs[parseInt(b.dataset.deleg)];
+    j.delegated = true; log(`Делегировал «${j.name}»: доход ${fmt(jobIncome(j))}, время ${jobHours(j)} ч/мес.`, 'good');
+    render(); openJobs();
+  });
 }
 
-/* ---------- Ребёнок ---------- */
-function cellBaby(){
-  if(S.children >= 3){
-    openCard(simpleModal('badge-event','событие', 'Ребёнок',
-      'У вас уже трое детей - семья в полном составе. Расходы не меняются.', 'Ок'));
-    $('#m-ok').onclick = () => { closeCard(); endTurn(); };
-    return;
+/* ====================================================================
+   УПРАВЛЕНИЕ АКТИВАМИ И ДОЛГАМИ
+   ==================================================================== */
+function manageAsset(id){
+  if(busy) return;
+  const a = S.assets.find(x => x.id === id); if(!a) return;
+  if(a.real){
+    openCard(simpleModal('badge-event','актив', a.title, `Это твой действующий источник дохода (~${fmtSigned(assetMonthlyNet(a))}/мес), а не товар на продажу. Его можно только наращивать.`, 'Ясно'));
+    $('#m-ok').onclick = () => closeCard(); return;
   }
-  S.children++;
-  openCard(simpleModal('badge-event','прибавление', 'Пополнение в семье! 👶',
-    `Поздравляем - у вас ${S.children===1?'родился первый ребёнок':'теперь '+S.children+' детей'}!
-     Расходы выросли на ${fmt(S.perChild)}/мес.`, 'Ура'));
-  $('#m-ok').onclick = () => { closeCard(); log(`Родился ребёнок. Расходы +${fmt(S.perChild)}/мес.`, 'bad'); endTurn(); };
-}
-
-/* ---------- Увольнение ---------- */
-function cellDownsized(){
-  const cost = totalExpense();
-  const needLoan = S.cash < cost;
-  let loanAmt = needLoan ? Math.ceil((cost - S.cash)/1000)*1000 : 0;
+  const salePrice = a.cost, net = salePrice - (a.debt||0);
   openCard(`
-    <div class="modal-head"><span class="deck-badge badge-doodad">увольнение</span><h3>Вас сократили ⚠️</h3></div>
+    <div class="modal-head"><span class="deck-badge badge-market">актив</span><h3>${a.title}</h3></div>
     <div class="modal-body">
-      <p class="deal-desc">Потеря работы. Нужно оплатить полные месячные расходы и пропустить 2 хода.</p>
-      <div class="deal-stats">${dealStat('Расходы к оплате', fmt(cost), 'neg')}${dealStat('Пропуск ходов', '2')}</div>
-      ${needLoan?`<p class="modal-note" style="color:var(--red)">Не хватает - кредит ${fmt(loanAmt)}.</p>`:''}
+      <p class="deal-desc">Продажа по балансовой цене (премию иногда даёт «Рынок»). Уйдёт поток ${fmtSigned(assetMonthlyNet(a))}/мес и освободится ${a.hours||0} ч/мес.</p>
+      <div class="deal-stats">${dealStat('Цена', fmt(salePrice))}${a.debt>0?dealStat('Минус долг', fmt(a.debt), 'neg'):''}${dealStat('На руки', fmt(net), net>=0?'pos':'neg')}${dealStat('Освободит', (a.hours||0)+' ч')}</div>
+      ${(a.liquidity==='low')?`<p class="modal-note">Недвижимость/бизнес продаётся не мгновенно - в жизни это месяцы.</p>`:''}
     </div>
-    <div class="modal-foot"><button class="btn primary" id="dn-ok">${needLoan?'Кредит и оплатить':'Оплатить'}</button></div>`);
-  $('#dn-ok').onclick = () => {
-    if(needLoan) takeBankLoan(loanAmt, true);
-    S.cash -= cost; S.skipTurns = 2;
-    log(`Увольнение: оплачено ${fmt(cost)}, пропуск 2 ходов.`, 'bad');
-    closeCard(); endTurn();
-  };
+    <div class="modal-foot"><button class="btn ghost" id="a-keep">Оставить</button><button class="btn primary" id="a-sell">Продать за ${fmt(net)}</button></div>`);
+  $('#a-keep').onclick = () => closeCard();
+  $('#a-sell').onclick = () => { S.cash += net; S.assets = S.assets.filter(x=>x!==a); log(`Продан актив «${a.title}» за ${fmt(salePrice)} (на руки ${fmt(net)}).`, 'good'); closeCard(); render(); };
 }
-
-function simpleModal(badgeCls, badgeText, title, desc, btnText){
-  return `<div class="modal-head"><span class="deck-badge ${badgeCls}">${badgeText}</span><h3>${title}</h3></div>
-    <div class="modal-body"><p class="deal-desc">${desc}</p></div>
-    <div class="modal-foot"><button class="btn primary" id="m-ok">${btnText}</button></div>`;
+function manageLiability(name){
+  if(busy) return;
+  const L = S.liabilities[name]; if(!L) return;
+  const ratio = L.balance>0 ? L.payment/L.balance : 0;
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-event">досрочное гашение</span><h3>${name}</h3></div>
+    <div class="modal-body"><p class="deal-desc">Гасим долг досрочно из наличных, кратно 1000 ₽. Платёж снижается пропорционально остатку.</p>
+      <div class="deal-stats">${dealStat('Остаток', fmt(L.balance), 'neg')}${dealStat('Платёж/мес', fmt(L.payment))}${dealStat('Наличные', fmt(S.cash))}</div>
+      <div class="qty-row"><label>Погасить (₽):</label><input type="number" id="pay-amt" value="${Math.min(L.balance, Math.floor(S.cash/1000)*1000)}" min="0" step="1000"></div></div>
+    <div class="modal-foot"><button class="btn ghost" id="pay-cancel">Отмена</button><button class="btn primary" id="pay-do">Погасить</button></div>`);
+  $('#pay-cancel').onclick = () => closeCard();
+  $('#pay-do').onclick = () => {
+    let amt = Math.floor((parseInt($('#pay-amt').value)||0)/1000)*1000;
+    amt = Math.min(amt, L.balance, Math.floor(S.cash/1000)*1000);
+    if(amt < 1000){ log('Нужно не меньше 1000 ₽ наличными.', ''); return; }
+    L.balance -= amt; S.cash -= amt; L.payment = Math.round(L.balance*ratio);
+    if(L.balance<=0) delete S.liabilities[name];
+    log(`Досрочно погашено «${name}»: ${fmt(amt)}.`, 'good'); closeCard(); render();
+  };
 }
 
 /* ====================================================================
    БАНКОВСКИЙ КРЕДИТ
    ==================================================================== */
 function takeBankLoan(amount, silent){
-  if(amount <= 0) return;
-  if(!S.liabilities['Банковский кредит'])
-    S.liabilities['Банковский кредит'] = { balance:0, payment:0 };
+  if(amount<=0) return;
+  if(!S.liabilities['Банковский кредит']) S.liabilities['Банковский кредит']={balance:0,payment:0};
   const L = S.liabilities['Банковский кредит'];
-  L.balance += amount;
-  L.payment = Math.round(L.balance * LOAN_RATE);
-  S.cash += amount;
-  if(!silent) log(`Взят кредит ${fmt(amount)} (платёж теперь ${fmt(L.payment)}/мес).`, 'bad');
-}
-
-function openLoanModal(){
-  if(busy) return;
-  const L = S.liabilities['Банковский кредит'];
-  const hasLoan = L && L.balance > 0;
-  openCard(`
-    <div class="modal-head"><span class="deck-badge badge-event">банк</span><h3>Банковский кредит</h3></div>
-    <div class="modal-body">
-      <p class="deal-desc">Кредит выдаётся кратно 1000 ₽. Ежемесячный платёж - 3% от суммы долга (≈36% годовых, как потребкредит).</p>
-      ${hasLoan?`<div class="deal-stats">${dealStat('Текущий долг', fmt(L.balance), 'neg')}${dealStat('Платёж/мес', fmt(L.payment))}</div>`:''}
-      <div class="qty-row">
-        <label>Сумма (₽):</label>
-        <input type="number" id="loan-amt" value="100000" min="1000" step="1000">
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn ghost" id="loan-cancel">Отмена</button>
-      ${hasLoan?`<button class="btn" id="loan-repay">Погасить</button>`:''}
-      <button class="btn primary" id="loan-take">Взять</button>
-    </div>`);
-  $('#loan-cancel').onclick = () => closeCard();
-  $('#loan-take').onclick = () => {
-    let amt = Math.floor((parseInt($('#loan-amt').value)||0)/1000)*1000;
-    if(amt < 1000){ return; }
-    takeBankLoan(amt, false);
-    closeCard(); render();
-  };
-  if(hasLoan) $('#loan-repay').onclick = () => {
-    let amt = Math.floor((parseInt($('#loan-amt').value)||0)/1000)*1000;
-    amt = Math.min(amt, L.balance, S.cash);
-    if(amt < 1000){ log('Для погашения нужно не меньше 1000 ₽ наличными.', ''); return; }
-    L.balance -= amt; S.cash -= amt;
-    L.payment = Math.round(L.balance * LOAN_RATE);
-    if(L.balance <= 0) delete S.liabilities['Банковский кредит'];
-    log(`Погашено ${fmt(amt)} кредита.`, 'good');
-    closeCard(); render();
-  };
+  L.balance += amount; L.payment = Math.round(L.balance*LOAN_RATE); S.cash += amount;
+  if(!silent) log(`Взят кредит ${fmt(amount)} (платёж ${fmt(L.payment)}/мес).`, 'bad');
 }
 
 /* ====================================================================
-   АКТИВНОЕ УПРАВЛЕНИЕ ПОРТФЕЛЕМ (продажа активов, досрочное гашение долгов)
-   Доступно в любой момент своего хода (когда нет открытой карточки/анимации).
+   СОВЕТНИК
    ==================================================================== */
-function manageAsset(id){
-  if(busy) return;
-  const a = S.assets.find(x => x.id === id);
-  if(!a) return;
-
-  // свои стартовые потоки (КАЭЛ, проценты) — это доход, не торгуемый актив
-  if(a.real){
-    openCard(simpleModal('badge-event','актив', a.title,
-      `Это твой действующий источник дохода (+${fmt(a.cashflow)}/мес), а не объект на продажу. В игре он не продаётся - его можно только наращивать в жизни.`, 'Ясно'));
-    $('#m-ok').onclick = () => closeCard();
-    return;
-  }
-
-  // акции — продажа по текущей цене, можно частично
-  if(a.kind === 'stock'){
-    const price = (S.marketPrices && S.marketPrices[a.symbol]) || a.price;
-    openCard(`
-      <div class="modal-head"><span class="deck-badge badge-market">продажа</span><h3>${a.title}</h3></div>
-      <div class="modal-body">
-        <div class="deal-stats">${dealStat('В портфеле', a.shares+' шт')}${dealStat('Текущая цена', fmt(price))}</div>
-        <div class="qty-row">
-          <label>Продать акций:</label>
-          <input type="number" id="sell-qty" value="${a.shares}" min="1" max="${a.shares}" step="1">
-          <span id="sell-sum" style="font-family:var(--mono)"></span>
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn ghost" id="sell-cancel">Отмена</button>
-        <button class="btn primary" id="sell-do">Продать</button>
-      </div>`);
-    const q = $('#sell-qty'), sum = $('#sell-sum');
-    const upd = () => { const n=Math.min(a.shares,Math.max(0,parseInt(q.value)||0)); sum.textContent='= '+fmt(n*price); $('#sell-do').disabled=n<=0; };
-    q.addEventListener('input', upd); upd();
-    $('#sell-cancel').onclick = () => closeCard();
-    $('#sell-do').onclick = () => {
-      const n = Math.min(a.shares, Math.max(0, parseInt(q.value)||0));
-      if(n <= 0) return;
-      S.cash += n * price;
-      a.shares -= n;
-      if(a.shares <= 0) S.assets = S.assets.filter(x => x !== a);
-      log(`Продано ${n} акций <b>${a.symbol}</b> за ${fmt(n*price)}.`, 'good');
-      closeCard(); render();
-    };
-    return;
-  }
-
-  // недвижимость / бизнес — продажа по балансовой цене (без премии; премию даёт «Рынок»)
-  const salePrice = a.cost, net = salePrice - (a.debt || 0);
-  openCard(`
-    <div class="modal-head"><span class="deck-badge badge-market">продажа</span><h3>${a.title}</h3></div>
-    <div class="modal-body">
-      <p class="deal-desc">Продажа по текущей цене, без премии (премию иногда даёт клетка «Рынок»). Поток ${fmtSigned(a.cashflow)}/мес уйдёт.</p>
-      <div class="deal-stats">
-        ${dealStat('Цена продажи', fmt(salePrice))}
-        ${a.debt>0?dealStat('Минус долг', fmt(a.debt), 'neg'):''}
-        ${dealStat('На руки', fmt(net), net>=0?'pos':'neg')}
-        ${dealStat('Теряешь поток', fmtSigned(-a.cashflow), 'neg')}
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn ghost" id="sell-cancel">Оставить</button>
-      <button class="btn primary" id="sell-do">Продать за ${fmt(net)}</button>
-    </div>`);
-  $('#sell-cancel').onclick = () => closeCard();
-  $('#sell-do').onclick = () => {
-    S.cash += net;
-    S.assets = S.assets.filter(x => x !== a);
-    log(`Продано: <b>${a.title}</b> за ${fmt(salePrice)} (на руки ${fmt(net)}).`, 'good');
-    closeCard(); render();
-  };
+function advisorTip(act, pas, exp, cf){
+  const gap = exp - pas, ov = overload(), free = freeHours();
+  if(ov > 0) return `Ты в <b>перегрузе на ${ov} ч/мес</b> - доход режется и копится выгорание. Освободи время: уволься или делегируй (кнопка «Работы»).`;
+  if(cf < 0) return 'Денежный поток <b>отрицательный</b>. Гаси дорогие долги и не бери пассивы и убыточные «активы».';
+  if(pas <= passiveBaseline()) return 'Чтобы расти, нужен пассив без времени: начни с биржи - ОФЗ, дивидендные акции, фонды. Времени почти не отнимают.';
+  if(free <= 5 && !isFree()) return `Времени на новые активы почти нет (${free} ч/мес). Либо бери только пассив с биржи, либо освобождай время.`;
+  if(gap <= 0) return 'Пассивный доход покрыл расходы - ты свободен. Загляни в «Работы»: можно уйти с найма и бросить время в активы.';
+  if(gap < exp*0.25) return `Почти у цели: до свободы ${fmt(gap)}/мес пассивного потока. Добавь пассивных активов - и можно уходить с работы.`;
+  return `Сравнивай сделки по доходности, ВРЕМЕНИ и своей экспертизе. До свободы ещё ${fmt(gap)}/мес пассивного дохода.`;
 }
-
-function manageLiability(name){
-  if(busy) return;
-  const L = S.liabilities[name];
-  if(!L) return;
-  const ratio = L.balance > 0 ? L.payment / L.balance : 0;   // сохраняем долю платежа при частичном гашении
-  openCard(`
-    <div class="modal-head"><span class="deck-badge badge-event">досрочное гашение</span><h3>${name}</h3></div>
-    <div class="modal-body">
-      <p class="deal-desc">Гасим долг досрочно из наличных - кратно 1000 ₽. Чем меньше долг, тем меньше ежемесячный платёж.</p>
-      <div class="deal-stats">${dealStat('Остаток долга', fmt(L.balance), 'neg')}${dealStat('Платёж/мес', fmt(L.payment))}${dealStat('Наличные', fmt(S.cash))}</div>
-      <div class="qty-row">
-        <label>Погасить (₽):</label>
-        <input type="number" id="pay-amt" value="${Math.min(L.balance, Math.floor(S.cash/1000)*1000)}" min="0" step="1000">
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn ghost" id="pay-cancel">Отмена</button>
-      <button class="btn primary" id="pay-do">Погасить</button>
-    </div>`);
-  $('#pay-cancel').onclick = () => closeCard();
-  $('#pay-do').onclick = () => {
-    let amt = Math.floor((parseInt($('#pay-amt').value)||0)/1000)*1000;
-    amt = Math.min(amt, L.balance, Math.floor(S.cash/1000)*1000);
-    if(amt < 1000){ log('Для гашения нужно не меньше 1000 ₽ наличными.', ''); return; }
-    L.balance -= amt; S.cash -= amt;
-    L.payment = Math.round(L.balance * ratio);
-    if(L.balance <= 0) delete S.liabilities[name];
-    log(`Досрочно погашено по «${name}»: ${fmt(amt)}.`, 'good');
-    closeCard(); render();
-  };
+function passiveBaseline(){ // стартовый «свой» пассив (КАЭЛ+проценты), чтобы не подсказывать очевидное
+  let s=0; for(const a of S.assets) if(a.real) s+=assetMonthlyNet(a); return s;
 }
 
 /* ====================================================================
-   ПОБЕДА: выход из крысиных бегов
+   СПРАВКА
+   ==================================================================== */
+function openHelp(){
+  const secs = HELP_SECTIONS.map(s=>`<div class="help-sec"><h4>${s.h}</h4><p>${s.p}</p></div>`).join('');
+  openCard(`<div class="modal-head"><span class="deck-badge badge-small">справка</span><h3>Принципы и правила игры</h3></div>
+    <div class="modal-body" style="max-height:62vh;overflow-y:auto">${secs}</div>
+    <div class="modal-foot"><button class="btn primary" id="help-close">Понятно</button></div>`);
+  $('#card-modal').classList.add('help-modal');
+  $('#help-close').onclick = () => closeCard();
+}
+
+/* ====================================================================
+   ПОБЕДА
    ==================================================================== */
 function checkWin(){
   if(S.won) return;
   if(isFree()){
-    S.won = true;
-    busy = true; render();
-    const pas = passiveIncome(), exp = totalExpense();
-    openCard(`
-      <div class="modal win-screen">
-        <div class="modal-head"><span class="deck-badge badge-small">победа</span><h3>🎉 Выход из крысиных бегов!</h3></div>
-        <div class="modal-body">
-          <div class="win-big">🏁</div>
-          <p class="deal-desc">Ваш пассивный доход (${fmt(pas)}/мес) покрыл расходы (${fmt(exp)}/мес).
-            Вы больше не зависите от зарплаты - можно выходить на скоростную дорожку!</p>
-          <p class="modal-note">Скоростная дорожка (Fast Track) - в следующей итерации.
-            Пока можно продолжить наращивать поток в крысиных бегах.</p>
-        </div>
-        <div class="modal-foot"><button class="btn primary" id="win-continue">Продолжить игру</button></div>
-      </div>`);
-    log('🎉 ПОБЕДА! Пассивный доход покрыл расходы - выход из крысиных бегов!', 'gold');
-    $('#win-continue').onclick = () => { closeCard(); busy = false; render(); };
+    S.won = true; busy = true; render();
+    openCard(`<div class="modal win-screen">
+      <div class="modal-head"><span class="deck-badge badge-small">свобода</span><h3>🎉 Финансовая свобода!</h3></div>
+      <div class="modal-body"><div class="win-big">🏁</div>
+        <p class="deal-desc">Пассивный доход (${fmt(passiveNetMonthly())}/мес) покрыл расходы (${fmt(expensesMonthly())}/мес). Тебе ${curAge()} лет, на дворе ${dateLabel()}.</p>
+        <p class="modal-note">Теперь зайди в «Работы» и уйди с найма - освободишь время и внимание, чтобы растить активы кратно быстрее. Это и есть приз: не «лежать», а перебросить время в создание большего.</p></div>
+      <div class="modal-foot"><button class="btn" id="win-jobs">К работам</button><button class="btn primary" id="win-go">Продолжить</button></div></div>`);
+    log(`🎉 СВОБОДА в ${dateLabel()}, в ${curAge()} лет! Пассивный доход покрыл расходы.`, 'gold');
+    $('#win-go').onclick = () => { closeCard(); busy=false; render(); };
+    $('#win-jobs').onclick = () => { closeCard(); busy=false; render(); openJobs(); };
   }
-}
-
-/* ====================================================================
-   СОВЕТНИК (контекстные подсказки в духе Кийосаки)
-   ==================================================================== */
-function advisorTip(inc, exp, pas, cf){
-  const gap = exp - pas;
-  const L = S.liabilities['Банковский кредит'];
-  // приоритет: критичные состояния → потом обучающие
-  if(cf < 0)
-    return 'Денежный поток <b>отрицательный</b> - расходы выше дохода. Гаси дорогие долги и не бери новых пассивов.';
-  if(L && L.balance > 0)
-    return `На тебе банковский кредит ${fmt(L.balance)} под 3%/мес - это якорь. Гаси его в первую очередь (кнопка «Взять кредит»).`;
-  if(pas <= 0)
-    return 'Пока твои деньги не работают. Купи первый <b>актив</b> с потоком: вклад, ОФЗ, дивидендные акции или малый бизнес.';
-  if(S.cash > 1500000)
-    return `На руках ${fmt(S.cash)} лежат без дела. Деньги должны работать - вложи их в актив, дающий поток.`;
-  if(gap <= 0)
-    return 'Пассивный доход уже покрывает расходы - ты свободен! Можно выходить из крысиных бегов.';
-  if(gap < exp * 0.25)
-    return `Ты почти у цели! До выхода - всего ${fmt(gap)}/мес пассивного потока. Ещё пара активов - и свобода.`;
-  if(pas < exp * 0.5)
-    return `Хорошее начало: пассивный ${fmt(pas)} из ${fmt(exp)}. Сравнивай сделки по доходности и бери активы с потоком, а не пассивы.`;
-  return `Держи курс: каждый новый актив приближает выход. Осталось закрыть ${fmt(gap)}/мес пассивным доходом.`;
-}
-
-/* ====================================================================
-   СПРАВКА (принципы Кийосаки)
-   ==================================================================== */
-function openHelp(){
-  const secs = HELP_SECTIONS.map(s => `<div class="help-sec"><h4>${s.h}</h4><p>${s.p}</p></div>`).join('');
-  openCard(`
-    <div class="modal-head"><span class="deck-badge badge-small">справка</span><h3>Как победить: принципы Кийосаки</h3></div>
-    <div class="modal-body">${secs}</div>
-    <div class="modal-foot"><button class="btn primary" id="help-close">Понятно, играем</button></div>`);
-  $('#card-modal').classList.add('help-modal');
-  $('#help-close').onclick = () => closeCard();
 }
 
 /* ====================================================================
@@ -941,45 +904,34 @@ function openHelp(){
 function init(){
   buildBoardPositions();
   renderProfGrid();
-
   $('#btn-start').onclick = () => { if(selectedProf) startGame(selectedProf); };
   $('#btn-roll').onclick = onRollClick;
   $('#dice').onclick = onRollClick;
   $('#btn-help').onclick = openHelp;
-  $('#btn-loan').onclick = openLoanModal;
+  $('#btn-broker').onclick = openBroker;
+  $('#btn-jobs').onclick = openJobs;
 
-  // активное управление: клик по строке актива — продать, по строке долга — погасить
-  $('#stmt-assets').addEventListener('click', (e) => {
-    const row = e.target.closest('[data-aid]'); if(row) manageAsset(row.dataset.aid);
-  });
-  $('#stmt-liab').addEventListener('click', (e) => {
-    const row = e.target.closest('[data-liab]'); if(row) manageLiability(row.dataset.liab);
-  });
+  $('#stmt-assets').addEventListener('click', (e)=>{ const r=e.target.closest('[data-aid]'); if(r) manageAsset(r.dataset.aid); });
+  $('#stmt-liab').addEventListener('click', (e)=>{ const r=e.target.closest('[data-liab]'); if(r) manageLiability(r.dataset.liab); });
 
   $('#btn-restart').onclick = () => {
-    if(confirm('Начать новую игру? Текущий прогресс будет сброшен.')){
-      clearSave(); S = null; selectedProf = null;
-      $('#game-view').style.display = 'none';
-      $('#btn-start').disabled = true; $('#start-note').textContent = 'Профессия не выбрана';
+    if(confirm('Начать новую игру? Прогресс сбросится.')){
+      clearSave(); S=null; selectedProf=null;
+      $('#game-view').style.display='none';
+      $('#btn-start').disabled=true; $('#start-note').textContent='Профиль не выбран';
       document.querySelectorAll('.prof-card').forEach(c=>c.classList.remove('sel'));
       $('#start-overlay').classList.add('show');
     }
   };
-  $('#btn-reset').onclick = () => {
-    if(confirm('Полный сброс сохранения?')){ clearSave(); location.reload(); }
-  };
+  $('#btn-reset').onclick = () => { if(confirm('Полный сброс сохранения?')){ clearSave(); location.reload(); } };
 
-  // загрузка сохранённой игры
   const saved = loadSave();
   if(saved && saved.prof){
-    S = saved;
-    if(!S.marketPrices) S.marketPrices = {};
-    busy = false;
+    S = saved; busy=false;
     $('#start-overlay').classList.remove('show');
-    $('#game-view').style.display = 'grid';
+    $('#game-view').style.display='grid';
     render();
-    log('Игра загружена из сохранения.', 'info');
+    log('Игра загружена.', 'info');
   }
 }
-
 document.addEventListener('DOMContentLoaded', init);

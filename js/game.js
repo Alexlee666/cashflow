@@ -195,12 +195,51 @@ function render(){
   $('#m-cash').textContent = fmt(S.cash);
   $('#m-networth').textContent = fmt(netWorth());
 
-  // цель
-  const gap = exp - pas;
-  const goalNum = $('#goal-num');
-  if(gap <= 0){ goalNum.textContent = 'СВОБОДА!'; goalNum.classList.add('win'); $('#goal-sub').textContent = 'пассивный доход покрывает расходы'; }
-  else { goalNum.textContent = fmt(gap); goalNum.classList.remove('win'); $('#goal-sub').textContent = `пассивный ${fmt(pas)} из ${fmt(exp)} расходов`; }
-  $('#goal-bar').style.width = clamp(exp>0?pas/exp*100:0,0,100) + '%';
+  // цель: фазовый прогресс по брифу
+  const goalNum = $('#goal-num'), goalSub = $('#goal-sub'), goalBar = $('#goal-bar');
+  const kavelt = S.jobs.find(j => j.id === 'kavelt' && !j.quit);
+  const kaveltInc = kavelt ? jobIncome(kavelt) : 0;
+  const kael = S.jobs.find(j => j.id === 'kael' && !j.quit);
+  const rise = S.jobs.find(j => j.id === 'rise' && !j.quit);
+  const portf = securitiesValue();
+
+  if(!kavelt && (kael || rise)){
+    goalNum.textContent = 'ЗАПУСТИ КАВЕЛТ'; goalNum.classList.remove('win');
+    goalSub.textContent = 'переведи свободные часы в свою маржу';
+    goalBar.style.width = '0%';
+  } else if(kael && kaveltInc < jobIncome(kael)){
+    const pct = clamp(kaveltInc / jobIncome(kael) * 100, 0, 100);
+    goalNum.textContent = `${fmt(jobIncome(kael) - kaveltInc)} до сброса КАЭЛ`; goalNum.classList.remove('win');
+    goalSub.textContent = `КАВЕЛТ ${fmt(kaveltInc)} → порог ${fmt(jobIncome(kael))}`;
+    goalBar.style.width = pct + '%';
+  } else if(kael && kaveltInc >= jobIncome(kael)){
+    goalNum.textContent = 'СБРОСЬ КАЭЛ!'; goalNum.classList.add('win');
+    goalSub.textContent = `КАВЕЛТ ${fmt(kaveltInc)} >= КАЭЛ ${fmt(jobIncome(kael))} · жми «Работы»`;
+    goalBar.style.width = '100%';
+  } else if(rise && kaveltInc < jobIncome(rise)){
+    const pct = clamp(kaveltInc / jobIncome(rise) * 100, 0, 100);
+    goalNum.textContent = `${fmt(jobIncome(rise) - kaveltInc)} до сброса Райза`; goalNum.classList.remove('win');
+    goalSub.textContent = `КАВЕЛТ ${fmt(kaveltInc)} → порог ${fmt(jobIncome(rise))}`;
+    goalBar.style.width = pct + '%';
+  } else if(rise && kaveltInc >= jobIncome(rise)){
+    goalNum.textContent = 'СДАВАЙ РАЙЗ!'; goalNum.classList.add('win');
+    goalSub.textContent = `КАВЕЛТ ${fmt(kaveltInc)} >= Райз ${fmt(jobIncome(rise))} · ВЫХОД ИЗ БЕГОВ`;
+    goalBar.style.width = '100%';
+  } else if(!rise && !kael && portf < 108e6){
+    const pct = clamp(portf / 108e6 * 100, 0, 100);
+    goalNum.textContent = fmt(108e6 - portf) + ' до цели'; goalNum.classList.remove('win');
+    goalSub.textContent = `портфель ${fmt(portf)} из 108 млн`;
+    goalBar.style.width = pct + '%';
+  } else if(portf >= 108e6){
+    goalNum.textContent = 'МЕЧТА!'; goalNum.classList.add('win');
+    goalSub.textContent = `портфель ${fmt(portf)} — квартира, BMW, свобода`;
+    goalBar.style.width = '100%';
+  } else {
+    const gap = exp - pas;
+    if(gap <= 0){ goalNum.textContent = 'НА СВОЕЙ МАРЖЕ'; goalNum.classList.add('win'); goalSub.textContent = 'оклады сброшены, растим портфель'; }
+    else { goalNum.textContent = fmt(gap); goalNum.classList.remove('win'); goalSub.textContent = `пассив ${fmt(pas)} из ${fmt(exp)}`; }
+    goalBar.style.width = clamp(exp>0?pas/exp*100:0,0,100) + '%';
+  }
 
   // время / внимание
   renderTime();
@@ -498,6 +537,8 @@ function settleMonth(){
   delta -= expensesMonthly();
   S.cash += Math.round(delta);
 
+  // рост КАВЕЛТ (чем больше часов вложено, тем быстрее растёт спрос → маржа)
+  kaveltGrowthTick();
   // дрейф цен бумаг (с положительным трендом ≈ инфляция + реальный рост)
   driftPrices();
   // инфляция расходов
@@ -601,6 +642,33 @@ function yearlyReview(){
   }
   S.assets = S.assets.filter(a => !a._dead);
 }
+function kaveltGrowthTick(){
+  const kv = S.jobs.find(j => j.id === 'kavelt' && !j.quit);
+  if(!kv) return;
+  // рост пропорционален вложенным часам + немного случайности (спрос - не гарантия)
+  // базовый рост: ~15-25к/мес за каждые 30ч вложенных, с разбросом
+  const hoursInvested = kv.hours || 30;
+  const baseGrowth = Math.round(hoursInvested * (500 + rnd(400))); // 500-900 руб/час вложенный
+  const luck = Math.random();
+  if(luck < 0.08){
+    // плохой месяц: клиент ушёл / не заплатил
+    const loss = Math.min(kv.income, 30000 + rnd(40000));
+    kv.income = Math.max(0, kv.income - loss);
+    if(loss > 0) log(`КАВЕЛТ: клиент ушёл, маржа просела на ${fmt(loss)}.`, 'bad');
+  } else if(luck < 0.15){
+    // отличный месяц: крупный заказ
+    kv.income += baseGrowth * 3;
+    log(`КАВЕЛТ: крупный заказ! Маржа выросла до ${fmt(kv.income)}/мес.`, 'gold');
+  } else {
+    // обычный рост
+    kv.income += baseGrowth;
+  }
+  // потолок масштабирования зависит от часов (больше часов → больше клиентов → больше маржа)
+  // но есть естественный потолок ~25к на час (дорогие B2B-услуги)
+  const cap = hoursInvested * 25000;
+  kv.income = Math.min(kv.income, cap);
+}
+
 function burnoutTick(){
   const ov = overload();
   if(ov > 0 && Math.random() < CONFIG.burnoutEventChancePer10h * (ov/10)){
@@ -898,23 +966,48 @@ function openJobs(){
       <div class="brk-act"><button class="btn sm primary" data-hire="${i}">Устроиться</button></div></div>`;
   }).join('');
 
-  const freedomNote = isFree()
-    ? '<p class="yield-badge great">Ты финансово свободен: <b>пассивный</b> доход (без твоего времени) покрывает расходы. Можешь уволиться со всех работ.</p>'
-    : `<p class="yield-badge weak">Пассивный доход пока НЕ покрывает расходы (${fmt(passiveNetMonthly())} из ${fmt(expensesMonthly())}). Бизнес, съедающий время - это работа, не свобода. Свободно ${free} ч/мес.</p>`;
+  // КАВЕЛТ: главный выигрышный ход
+  const hasKavelt = S.jobs.some(j => j.id === 'kavelt' && !j.quit);
+  const kaveltBlock = hasKavelt ? '' : `
+      <h4 style="margin:12px 0 8px;color:var(--green);font-size:13px;text-transform:uppercase;letter-spacing:1px">Главный ход — свой бизнес</h4>
+      <div class="brk-row" style="border:1px solid var(--green)">
+        <div class="brk-info">
+          <div class="brk-name" style="color:var(--green)">Запустить КАВЕЛТ</div>
+          <div class="brk-sub">Своя маржа · инжиниринг · стартует с 0, растёт со спросом</div>
+          <div class="brk-own">Та же работа, что по найму, но свои клиенты. Доход без потолка. Нужно ${free >= 30 ? 'время и спрос' : '<span style="color:var(--red)">время (сейчас свободно только '+free+' ч)</span>'}.</div>
+        </div>
+        <div class="brk-act"><button class="btn sm primary" id="launch-kavelt" ${free>=15?'':'disabled'}>Запустить</button></div>
+      </div>`;
+
+  const freedomNote = !hasKavelt
+    ? `<p class="yield-badge trap">Ты в крысиных бегах: два оклада с потолком, тонкий профицит, пассив ~5%. Сбережениями не выйти. <b>Запусти КАВЕЛТ</b> — переведи часы в свою маржу.</p>`
+    : (S.jobs.every(j => j.id==='kavelt' || j.quit)
+      ? '<p class="yield-badge great">На своей марже. Оклады сброшены. Излишек → в портфель.</p>'
+      : `<p class="yield-badge weak">КАВЕЛТ запущен. Расти его до порога сброса следующего оклада. Свободно ${free} ч/мес.</p>`);
 
   openCard(`
     <div class="modal-head"><span class="deck-badge badge-event">работы и время</span><h3>Работы · свободно ${free} ч/мес</h3></div>
     <div class="modal-body" style="max-height:65vh;overflow-y:auto">
       ${freedomNote}
+      ${kaveltBlock}
       <h4 style="margin:12px 0 8px;color:var(--text-dim);font-size:13px;text-transform:uppercase;letter-spacing:1px">Твои работы</h4>
       ${curRows}
-      <h4 style="margin:16px 0 8px;color:var(--accent);font-size:13px;text-transform:uppercase;letter-spacing:1px">Рынок труда — устроиться</h4>
-      <p style="font-size:12px;color:var(--text-mut);margin-bottom:8px">Наёмная работа, подработки, самозанятость. Каждая стоит времени.</p>
+      <h4 style="margin:16px 0 8px;color:var(--accent);font-size:13px;text-transform:uppercase;letter-spacing:1px">Рынок труда</h4>
+      <p style="font-size:12px;color:var(--text-mut);margin-bottom:8px">Наёмная, подработки, самозанятость. Каждая стоит времени. Третий оклад - ловушка: ещё один потолок.</p>
       ${marketRows}
     </div>
     <div class="modal-foot"><button class="btn primary" id="jobs-close">Закрыть</button></div>`);
   $('#card-modal').classList.add('broker-modal');
   $('#jobs-close').onclick = () => closeCard();
+
+  // запуск КАВЕЛТ
+  const launchBtn = document.getElementById('launch-kavelt');
+  if(launchBtn) launchBtn.onclick = () => {
+    S.jobs.push({id:'kavelt', name:'КАВЕЛТ (свой бизнес)', income:0, hours:30, kind:'свой бизнес', canQuit:true, domain:'инжиниринг',
+      note:'Своя маржа. Растёт со спросом. Ищи клиентов, часы → в оффер и касания.'});
+    log('Запущен <b>КАВЕЛТ</b>! Пока доход 0 - нужен спрос (клиенты). Вкладывай часы в касания и оффер.', 'gold');
+    render(); openJobs();
+  };
 
   // увольнение
   $('#card-modal').querySelectorAll('[data-quit]').forEach(b => b.onclick = () => {
@@ -1102,17 +1195,55 @@ function openLifestyle(){
 /* ====================================================================
    СОВЕТНИК
    ==================================================================== */
+/* Советник ведёт по выигрышной последовательности из брифа:
+   1) Найти часы → 2) Часы в КАВЕЛТ → 3) Сбросить КАЭЛ → 4) Сбросить Райз → 5) Портфель → 6) Мечта */
 function advisorTip(act, pas, exp, cf){
-  const gap = exp - pas, ov = overload(), free = freeHours();
-  if(ov > 0) return `Ты в <b>перегрузе на ${ov} ч/мес</b> - доход режется и копится выгорание. Освободи время: уволься или делегируй (кнопка «Работы»).`;
-  if(cf < 0) return 'Денежный поток <b>отрицательный</b>. Гаси дорогие долги и не бери пассивы и убыточные «активы».';
-  if(pas <= passiveBaseline()) return 'Чтобы расти, нужен пассив без времени: начни с биржи - ОФЗ, дивидендные акции, фонды. Времени почти не отнимают.';
-  if(free <= 5 && !isFree()) return `Времени на новые активы почти нет (${free} ч/мес). Либо бери только пассив с биржи, либо освобождай время.`;
-  if(gap <= 0) return 'Пассивный доход покрыл расходы - ты свободен. Загляни в «Работы»: можно уйти с найма и бросить время в активы.';
-  if(gap < exp*0.25) return `Почти у цели: до свободы ${fmt(gap)}/мес пассивного потока. Добавь пассивных активов - и можно уходить с работы.`;
-  return `Сравнивай сделки по доходности, ВРЕМЕНИ и своей экспертизе. До свободы ещё ${fmt(gap)}/мес пассивного дохода.`;
+  const ov = overload(), free = freeHours();
+  const kavelt = S.jobs.find(j => j.id === 'kavelt' && !j.quit);
+  const kaveltIncome = kavelt ? jobIncome(kavelt) : 0;
+  const kael = S.jobs.find(j => j.id === 'kael' && !j.quit);
+  const kaelIncome = kael ? jobIncome(kael) : 0;
+  const rise = S.jobs.find(j => j.id === 'rise' && !j.quit);
+  const riseIncome = rise ? jobIncome(rise) : 0;
+  const ip = S.liabilities['Ипотека (16,9%)'];
+
+  // критические
+  if(ov > 0) return `<b>Перегруз ${ov} ч!</b> Доход режется, копится выгорание. Освободи часы: «Работы» → уволиться / делегировать. Часы - валюта, не сжигай их.`;
+  if(cf < 0) return '<b>Поток минусовой.</b> Гаси дорогие долги, не бери пассивы. Авто в кредит сейчас - ловушка.';
+
+  // фаза 0: нет КАВЕЛТ - главный ход
+  if(!kavelt){
+    if(free < 20) return `Свободных часов мало (${free}). Сожми КАЭЛ через ИИ или найди «потерянные» часы (дневник). Твоя валюта - время, не деньги.`;
+    return `<b>Главный ход:</b> свободные ${free} ч → в КАВЕЛТ. Запусти свой бизнес (кнопка «Работы» или клетка «Сделка»): оффер, касания, первые свои клиенты. Спрос важнее денег.`;
+  }
+
+  // фаза 1: КАВЕЛТ есть, растёт к порогу КАЭЛ
+  if(kael && kaveltIncome < kaelIncome)
+    return `КАВЕЛТ приносит ${fmt(kaveltIncome)}, КАЭЛ - ${fmt(kaelIncome)}. <b>Порог 1:</b> когда КАВЕЛТ >= КАЭЛ → сбрось КАЭЛ и забери ${kael.hours} ч. Осталось ${fmt(kaelIncome - kaveltIncome)}.`;
+
+  // порог 1 достигнут, КАЭЛ ещё не сброшен
+  if(kael && kaveltIncome >= kaelIncome)
+    return `<b>ПОРОГ 1 достигнут!</b> КАВЕЛТ (${fmt(kaveltIncome)}) >= КАЭЛ (${fmt(kaelIncome)}). Сбрось КАЭЛ → +${kael.hours} ч в КАВЕЛТ. Жми «Работы».`;
+
+  // фаза 2: КАЭЛ сброшен, растём к порогу Райза
+  if(rise && kaveltIncome < riseIncome)
+    return `КАВЕЛТ ${fmt(kaveltIncome)}, Райз ${fmt(riseIncome)}. <b>Порог 2:</b> когда КАВЕЛТ повторяемо >= Райз → сдай Райз и забери ${rise.hours} ч. Осталось ${fmt(riseIncome - kaveltIncome)}.`;
+
+  // порог 2 достигнут
+  if(rise && kaveltIncome >= riseIncome)
+    return `<b>ПОРОГ 2! КАВЕЛТ (${fmt(kaveltIncome)}) >= Райз (${fmt(riseIncome)}).</b> Сдавай Райз → +${rise.hours} ч. Это ВЫХОД из крысиных бегов.`;
+
+  // фаза 3: оба оклада сброшены - портфель
+  if(!rise && !kael){
+    if(ip) return `Оклады сброшены, ты на своей марже. Фоном убивай ипотеку (${fmt(ip.balance)} @16,9%). Излишек → в портфель (индекс/ОФЗ). Цель: 108 млн.`;
+    const portf = securitiesValue();
+    if(portf >= 108e6) return '<b>ПОРТФЕЛЬ 108 МЛН!</b> Fast Track: квартира-мечта, BMW, путешествия - из процентов, а не из зарплаты. Ты прошёл игру.';
+    return `Излишек КАВЕЛТ → в портфель. Сейчас ${fmt(portf)}, цель 108 млн. Реинвестируй дисциплинированно, сложный процент сделает остальное.`;
+  }
+
+  return `Свободно ${free} ч. Каждый час - или в КАВЕЛТ (рост маржи), или потерян. Спрос важнее денег, часы важнее спроса.`;
 }
-function passiveBaseline(){ // стартовый «свой» пассив (КАЭЛ+проценты), чтобы не подсказывать очевидное
+function passiveBaseline(){
   let s=0; for(const a of S.assets) if(a.real) s+=assetMonthlyNet(a); return s;
 }
 

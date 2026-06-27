@@ -596,11 +596,28 @@ function cellDeal(){
 function showDeal(deal){
   const invested = deal.cls==='realestate' ? deal.down : deal.cost;
   const canBuy = S.cash >= invested;
+  const shortfall = invested - S.cash;
+  const canLoan = !canBuy && shortfall > 0 && creditLimit() >= shortfall;
+  const loanAmt = canLoan ? Math.ceil(shortfall/1000)*1000 : 0;
+  const loanPay = Math.round(loanAmt * LOAN_RATE);
+
   const annM = Math.round(deal.annualIncome/12);
   let stats = dealStat(deal.cls==='realestate'?'Взнос/нал':'Вход', fmt(invested));
   if(deal.cls==='realestate' && deal.mortgage>0) stats += dealStat('Ипотека', fmt(deal.mortgage), 'neg');
   stats += dealStat('Поток ~/мес', fmtSigned(annM), annM>=0?'pos':'neg');
   stats += dealStat('Время', (deal.hours||0)+' ч/мес');
+
+  let cashNote = '';
+  if(canBuy){
+    cashNote = '';
+  } else if(canLoan){
+    cashNote = `<p class="modal-note" style="color:var(--accent)">Не хватает ${fmt(shortfall)}. Банк одобрит кредит ${fmt(loanAmt)} (платёж +${fmt(loanPay)}/мес). ПДН после: ${Math.round((currentDebtPayments()+loanPay)/monthlyIncomeForCredit()*100)}%.</p>`;
+  } else if(shortfall > 0){
+    const reason = creditLimit() < shortfall ? `ПДН на пределе (${Math.round(pdn()*100)}%) - банк откажет` : 'не хватает наличных';
+    cashNote = `<p class="modal-note" style="color:var(--red)">Не хватает ${fmt(shortfall)}. ${reason}.</p>`;
+  }
+
+  const canAct = canBuy || canLoan;
 
   openCard(`
     <div class="modal-head"><span class="deck-badge ${deal.cls==='realestate'?'badge-market':'badge-big'}">${deal.cls==='realestate'?'недвижимость':'бизнес'}</span><h3>${deal.title}</h3></div>
@@ -609,17 +626,17 @@ function showDeal(deal){
       <div class="deal-stats">${stats}</div>
       ${dealVerdict(deal)}
       <p class="deal-desc">${deal.desc}</p>
+      ${cashNote}
       ${freeHours() < (deal.hours||0) && deal.hours>0 ? `<p class="modal-note" style="color:var(--red)">У тебя свободно лишь ${freeHours()} ч/мес, а нужно ${deal.hours}. Возьмёшь - уйдёшь в перегруз${deal.manager?', или наймёшь управляющего':''}.</p>` : ''}
     </div>
     <div class="modal-foot">
-      <span class="modal-note">${canBuy?'':'Не хватает наличных'}</span>
       <button class="btn ghost" id="d-skip">Отказаться</button>
-      ${deal.manager && deal.hours>0 ? `<button class="btn" id="d-mgr" ${canBuy?'':'disabled'}>С управляющим</button>` : ''}
-      <button class="btn primary" id="d-buy" ${canBuy?'':'disabled'}>Купить сам</button>
+      ${deal.manager && deal.hours>0 ? `<button class="btn" id="d-mgr" ${canAct?'':'disabled'}>${canLoan&&!canBuy?'Кредит + управляющий':'С управляющим'}</button>` : ''}
+      <button class="btn primary" id="d-buy" ${canAct?'':'disabled'}>${canBuy?'Купить сам':(canLoan?`В кредит ${fmt(loanAmt)} и купить`:'Не хватает средств')}</button>
     </div>`);
   $('#d-skip').onclick = () => { closeCard(); log(`Отказ: ${deal.title}.`, ''); endTurn(); };
-  $('#d-buy').onclick = () => buyDeal(deal, false);
-  if(deal.manager && deal.hours>0) $('#d-mgr').onclick = () => buyDeal(deal, true);
+  $('#d-buy').onclick = () => { if(!canBuy && canLoan) takeBankLoan(loanAmt, false); buyDeal(deal, false); };
+  if(deal.manager && deal.hours>0) $('#d-mgr').onclick = () => { if(!canBuy && canLoan) takeBankLoan(loanAmt, false); buyDeal(deal, true); };
 }
 
 function buyDeal(deal, withManager){

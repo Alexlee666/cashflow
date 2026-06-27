@@ -72,10 +72,11 @@ function assetMonthlyNet(a){
 }
 function securitiesDivMonthlyNet(){
   let s = 0;
+  const dm = (S && S.divMult) || 1;
   for(const sym in (S.holdings||{})){
     const def = SECURITIES.find(x => x.sym === sym);
     const h = S.holdings[sym];
-    if(def && h && h.shares > 0) s += def.dividend * h.shares;
+    if(def && h && h.shares > 0) s += def.dividend * dm * h.shares;
   }
   return Math.round(s / 12 * (1 - CONFIG.tax.dividend));
 }
@@ -449,13 +450,13 @@ function settleMonth(){
   delta -= expensesMonthly();
   S.cash += Math.round(delta);
 
-  // дрейф цен бумаг
+  // дрейф цен бумаг (с положительным трендом ≈ инфляция + реальный рост)
   driftPrices();
-  // инфляция
+  // инфляция расходов
   S.inflationMult *= (1 + CONFIG.monthlyInflation);
   // время идёт
   S.month++; S.turn++;
-  // годовой обзор бизнеса (раз в 12 месяцев) + выгорание
+  // раз в год: индексация доходов, обзор бизнеса, выгорание
   if(S.month % 12 === 0) yearlyReview();
   burnoutTick();
 }
@@ -481,31 +482,65 @@ function assetPayoutThisMonth(a, m){
 }
 function securitiesPayoutThisMonth(m){
   let s = 0;
+  const dm = S.divMult || 1;   // множитель роста дивидендов (индексация с инфляцией)
   for(const sym in (S.holdings||{})){
     const def = SECURITIES.find(x=>x.sym===sym); const hd = S.holdings[sym];
     if(!def || !hd || hd.shares<=0 || !def.dividend) continue;
     const months = def.payMonths === 'all' ? [0,1,2,3,4,5,6,7,8,9,10,11] : (def.payMonths||[]);
     if(months.indexOf(m) === -1) continue;
-    const pay = def.dividend * hd.shares / months.length * (1 - CONFIG.tax.dividend);
+    const pay = def.dividend * dm * hd.shares / months.length * (1 - CONFIG.tax.dividend);
     s += pay;
     if(pay > 0) log(`Выплата по «${def.name}»: ${fmtSigned(Math.round(pay))}.`, 'good');
   }
   return Math.round(s);
 }
 function driftPrices(){
+  // Акции/фонды долгосрочно растут: инфляция (~0.6%/мес) + реальный рост (~0.3%/мес) = ~0.9%/мес тренд.
+  // Облигации и золото — свой тренд. Поверх — случайная волатильность.
   for(const def of SECURITIES){
     const v = def.vol || 0.1;
-    const change = (Math.random()-0.48) * v * 0.5;   // лёгкий дрейф с небольшим уклоном вверх
-    S.prices[def.sym] = Math.max(def.price*0.3, Math.round((S.prices[def.sym]||def.price) * (1+change)));
+    const isStock = def.kind === 'акция' || def.kind === 'акция роста' || def.kind === 'фонд';
+    const isBond = def.kind === 'облигация';
+    const trend = isStock ? 0.009 : (isBond ? 0.001 : 0.005);  // месячный восходящий тренд
+    const noise = (Math.random() - 0.5) * v * 0.5;
+    S.prices[def.sym] = Math.max(def.price * 0.2, Math.round((S.prices[def.sym] || def.price) * (1 + trend + noise)));
   }
 }
+
 function yearlyReview(){
+  // 1) ИНДЕКСАЦИЯ ДОХОДОВ (раз в год, как в жизни)
+  const yearInfl = Math.pow(1 + CONFIG.monthlyInflation, 12) - 1;  // ~8%
+  const salaryIndex = 1 + yearInfl * 0.7;       // зарплату индексируют на ~70% инфляции (с отставанием)
+  const divIndex    = 1 + yearInfl * 0.85;       // дивиденды растут ~85% инфляции (компании поднимают цены)
+  const rentIndex   = 1 + yearInfl * 0.6;        // аренда отстаёт от инфляции (рынок давит)
+  const bizIndex    = 1 + yearInfl * 0.9;        // бизнес-доход хорошо растёт с ценами
+
+  // зарплаты
+  for(const j of S.jobs){
+    if(!j.quit){
+      j.income = Math.round(j.income * salaryIndex);
+      if(j.delegate) j.delegate.income = Math.round(j.delegate.income * salaryIndex);
+    }
+  }
+  // дивиденды по бумагам (растут в определениях — пересчитываем на S)
+  if(!S.divMult) S.divMult = 1;
+  S.divMult *= divIndex;
+  // доходы активов
+  for(const a of S.assets){
+    if(a.annualIncome <= 0) continue;  // ловушки не «лечатся» инфляцией
+    if(a.cls === 'realestate') a.annualIncome = Math.round(a.annualIncome * rentIndex);
+    else if(a.cls === 'business') a.annualIncome = Math.round(a.annualIncome * bizIndex);
+  }
+
+  log(`Годовой обзор: зарплаты +${Math.round((salaryIndex-1)*100)}%, аренда +${Math.round((rentIndex-1)*100)}%, бизнес +${Math.round((bizIndex-1)*100)}%, инфляция +${Math.round(yearInfl*100)}%.`, 'info');
+
+  // 2) РИСК-ОБЗОР бизнесов
   for(const a of S.assets){
     if(a.cls !== 'business' || a.real) continue;
     const effRisk = (a.risk||0) * expFactor(a.domain);
     if(Math.random() < effRisk){
-      if(Math.random() < 0.15){ // редкий крах
-        log(`💥 Бизнес «${a.title}» прогорел - актив потерян. Поток ${fmt(assetMonthlyNet(a))}/мес ушёл.`, 'bad');
+      if(Math.random() < 0.15){
+        log(`💥 Бизнес «${a.title}» прогорел - актив потерян.`, 'bad');
         a._dead = true;
       } else {
         a.health = Math.max(0.4, (a.health||1) - 0.3);

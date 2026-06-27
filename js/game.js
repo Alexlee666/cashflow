@@ -459,6 +459,7 @@ function settleMonth(){
   // раз в год: индексация доходов, обзор бизнеса, выгорание
   if(S.month % 12 === 0) yearlyReview();
   burnoutTick();
+  marketCrashTick();
 }
 
 function assetPayoutThisMonth(a, m){
@@ -559,6 +560,17 @@ function burnoutTick(){
     S.cash -= cost;
     log(`😮‍💨 Выгорание от перегруза: лечение/срыв сделки -${fmt(cost)}. Освободи время!`, 'bad');
   }
+}
+
+function marketCrashTick(){
+  // ~1 обвал за 7-10 лет (шанс ~1% в месяц)
+  if(Math.random() > 0.01) return;
+  const severity = 0.55 + Math.random() * 0.20;   // падение на 25-45%
+  for(const def of SECURITIES){
+    if(def.kind === 'облигация') { S.prices[def.sym] = Math.round((S.prices[def.sym]||def.price) * (0.90 + Math.random()*0.08)); continue; }
+    S.prices[def.sym] = Math.round((S.prices[def.sym]||def.price) * severity);
+  }
+  log('📉 Обвал на бирже! Акции и фонды резко подешевели. У кого кэш — время покупать дёшево.', 'bad');
 }
 
 /* ====================================================================

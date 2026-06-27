@@ -63,8 +63,15 @@ function overloadPenalty(){
 }
 
 /* ----------------------- Финансовые расчёты ----------------------- */
+const PASSIVE_HOURS_THRESHOLD = 4;   // актив ≤ 4 ч/мес = настоящий пассив; больше = активный
+
 function activeIncomeNet(){
-  let s = 0; for(const j of S.jobs) s += jobIncome(j);
+  let s = 0;
+  for(const j of S.jobs) s += jobIncome(j);
+  // бизнесы/активы, требующие ТВОЕГО времени (> порога) = активный доход, не пассив
+  for(const a of S.assets){
+    if((a.hours||0) > PASSIVE_HOURS_THRESHOLD) s += assetMonthlyNet(a);
+  }
   return Math.round(s * overloadPenalty());
 }
 function assetMonthlyNet(a){
@@ -81,9 +88,20 @@ function securitiesDivMonthlyNet(){
   return Math.round(s / 12 * (1 - CONFIG.tax.dividend));
 }
 function passiveNetMonthly(){
+  // ТОЛЬКО активы, не требующие твоего времени (≤ порога) + дивиденды/купоны
   let s = 0;
-  for(const a of S.assets) s += assetMonthlyNet(a);
+  for(const a of S.assets){
+    if((a.hours||0) <= PASSIVE_HOURS_THRESHOLD) s += assetMonthlyNet(a);
+  }
   s += securitiesDivMonthlyNet();
+  return s;
+}
+function activeAssetIncome(){
+  // бизнесы, съедающие время — это работа, не свобода
+  let s = 0;
+  for(const a of S.assets){
+    if((a.hours||0) > PASSIVE_HOURS_THRESHOLD) s += assetMonthlyNet(a);
+  }
   return s;
 }
 function securitiesValue(){
@@ -216,17 +234,41 @@ function renderTime(){
 }
 
 function renderStatement(act, pas, exp){
-  // Доходы (работы)
   let h = '';
+  // — АКТИВНЫЙ доход: работы + бизнесы, съедающие время —
+  h += `<div class="stmt-head" style="border:0;padding:0;margin-bottom:4px;color:var(--text-dim)"><span>Активный доход (требует времени)</span></div>`;
   for(const j of S.jobs){
     const inc = jobIncome(j);
-    const tag = j.quit ? '<span class="asset-tag">уволен</span>' : (j.delegated ? '<span class="asset-tag">делегировано</span>' : `<span class="asset-tag">${jobHours(j)} ч/мес</span>`);
+    const tag = j.quit ? '<span class="asset-tag">уволен</span>' : (j.delegated ? '<span class="asset-tag">делегировано</span>' : `<span class="asset-tag">${j.kind} · ${jobHours(j)} ч/мес</span>`);
     h += `<div class="stmt-row"><span class="lbl">${j.name} ${tag}</span><span class="num">${fmt(inc)}</span></div>`;
   }
+  // бизнесы-активы, съедающие время (> порога)
+  for(const a of S.assets){
+    if((a.hours||0) > PASSIVE_HOURS_THRESHOLD){
+      const net = assetMonthlyNet(a);
+      h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">свой бизнес · ${a.hours} ч/мес</span></span><span class="num">${fmt(net)}</span></div>`;
+    }
+  }
   if(overloadPenalty() < 1)
-    h += `<div class="stmt-row"><span class="lbl">Штраф за перегруз</span><span class="num neg">−${Math.round((1-overloadPenalty())*100)}%</span></div>`;
-  h += `<div class="stmt-total"><span>Активный доход</span><span>${fmt(act)}</span></div>`;
-  h += `<div class="stmt-row" style="margin-top:4px"><span class="lbl pos">Пассивный (чистый)</span><span class="num pos">${fmt(pas)}</span></div>`;
+    h += `<div class="stmt-row"><span class="lbl neg">Штраф за перегруз</span><span class="num neg">−${Math.round((1-overloadPenalty())*100)}%</span></div>`;
+  h += `<div class="stmt-total"><span>Активный итого</span><span>${fmt(act)}</span></div>`;
+
+  // — ПАССИВНЫЙ доход: не требует времени —
+  h += `<div class="stmt-head" style="border:0;padding:0;margin:8px 0 4px;color:var(--green)"><span>Пассивный доход (без твоего времени)</span></div>`;
+  let pasRows = 0;
+  for(const a of S.assets){
+    if((a.hours||0) <= PASSIVE_HOURS_THRESHOLD){
+      const net = assetMonthlyNet(a);
+      const pays = { monthly:'ежемес', quarterly:'кв', semiannual:'п/г', annual:'год' }[a.payout] || '';
+      h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">${a.hours||0} ч · ${pays}</span></span><span class="num pos">${fmtSigned(net)}</span></div>`;
+      pasRows++;
+    }
+  }
+  // дивиденды/купоны от бумаг
+  const divTotal = securitiesDivMonthlyNet();
+  if(divTotal > 0){ h += `<div class="stmt-row"><span class="lbl">Дивиденды / купоны (среднее)</span><span class="num pos">${fmtSigned(divTotal)}</span></div>`; pasRows++; }
+  if(pasRows === 0) h += `<div class="stmt-row"><span class="lbl" style="font-style:italic;color:var(--text-mut)">нет пассивного дохода</span></div>`;
+  h += `<div class="stmt-total pos"><span>Пассивный итого</span><span>${fmt(pas)}</span></div>`;
   $('#stmt-income').innerHTML = h;
 
   // Расходы
@@ -239,17 +281,8 @@ function renderStatement(act, pas, exp){
   h += `<div class="stmt-total"><span>Расходы / мес</span><span>${fmt(exp)}</span></div>`;
   $('#stmt-expense').innerHTML = h;
 
-  // Активы (бизнес/недвижимость + бумаги)
+  // Активы (портфель бумаг + все активы с балансовой стоимостью для netWorth)
   const rows = [];
-  for(const a of S.assets){
-    const net = assetMonthlyNet(a);
-    const ytag = a.real ? 'своё' : DOMAINS[a.domain] ? a.domain : a.cls;
-    const pays = { monthly:'ежемес', quarterly:'кв', semiannual:'п/г', annual:'год' }[a.payout] || '';
-    const health = (a.health!=null && a.health<1) ? ` <span class="asset-tag" style="color:var(--red)">−${Math.round((1-a.health)*100)}%</span>` : '';
-    rows.push(`<div class="stmt-row manageable" data-aid="${a.id}">
-      <span class="lbl">${a.title}${health}<br><span class="asset-tag">${ytag} · ${a.hours||0} ч · ${pays}</span></span>
-      <span class="num pos">${fmtSigned(net)}</span></div>`);
-  }
   // бумаги
   for(const sym in (S.holdings||{})){
     const hd = S.holdings[sym]; if(!hd || hd.shares<=0) continue;
@@ -824,7 +857,9 @@ function openBroker(){
 function openJobs(){
   if(busy) return;
   const free = freeHours();
-  const rows = S.jobs.map((j,i) => {
+
+  // текущие работы
+  const curRows = S.jobs.map((j,i) => {
     if(j.quit) return `<div class="brk-row"><div class="brk-info"><div class="brk-name">${j.name} <span class="asset-tag">уволен</span></div></div></div>`;
     let btns = '';
     if(j.delegate && !j.delegated) btns += `<button class="btn sm" data-deleg="${i}">${j.delegate.label||'Делегировать'}</button>`;
@@ -835,27 +870,55 @@ function openJobs(){
         ${j.note?`<div class="brk-own">${j.note}</div>`:''}</div>
       <div class="brk-act">${btns}</div></div>`;
   }).join('');
+
+  // рынок труда (вакансии, подработки, самозанятость)
+  const activeNames = new Set(S.jobs.filter(j=>!j.quit).map(j=>j.name));
+  const available = JOB_MARKET.filter(j => !activeNames.has(j.name));
+  const marketRows = available.map((j,i) => {
+    const kindCls = j.kind==='наёмная'?'badge-event':(j.kind==='подработка'?'badge-market':'badge-small');
+    return `<div class="brk-row">
+      <div class="brk-info"><div class="brk-name">${j.name} <span class="deck-badge ${kindCls}" style="font-size:10px">${j.kind}</span></div>
+        <div class="brk-sub">${fmt(j.income)} · ${j.hours} ч/мес${j.domain?' · '+DOMAINS[j.domain]:''}</div>
+        <div class="brk-own">${j.desc}</div></div>
+      <div class="brk-act"><button class="btn sm primary" data-hire="${i}">Устроиться</button></div></div>`;
+  }).join('');
+
   const freedomNote = isFree()
-    ? '<p class="yield-badge great">Ты финансово свободен: пассивный доход покрывает расходы. Можешь смело уходить с работы и освободить время для активов.</p>'
-    : `<p class="yield-badge weak">Пока пассивный доход НЕ покрывает расходы. Уволишься - просядет денежный поток. Свободно ${free} ч/мес.</p>`;
+    ? '<p class="yield-badge great">Ты финансово свободен: <b>пассивный</b> доход (без твоего времени) покрывает расходы. Можешь уволиться со всех работ.</p>'
+    : `<p class="yield-badge weak">Пассивный доход пока НЕ покрывает расходы (${fmt(passiveNetMonthly())} из ${fmt(expensesMonthly())}). Бизнес, съедающий время - это работа, не свобода. Свободно ${free} ч/мес.</p>`;
+
   openCard(`
     <div class="modal-head"><span class="deck-badge badge-event">работы и время</span><h3>Работы · свободно ${free} ч/мес</h3></div>
-    <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+    <div class="modal-body" style="max-height:65vh;overflow-y:auto">
       ${freedomNote}
-      ${rows}
+      <h4 style="margin:12px 0 8px;color:var(--text-dim);font-size:13px;text-transform:uppercase;letter-spacing:1px">Твои работы</h4>
+      ${curRows}
+      <h4 style="margin:16px 0 8px;color:var(--accent);font-size:13px;text-transform:uppercase;letter-spacing:1px">Рынок труда — устроиться</h4>
+      <p style="font-size:12px;color:var(--text-mut);margin-bottom:8px">Наёмная работа, подработки, самозанятость. Каждая стоит времени.</p>
+      ${marketRows}
     </div>
     <div class="modal-foot"><button class="btn primary" id="jobs-close">Закрыть</button></div>`);
   $('#card-modal').classList.add('broker-modal');
   $('#jobs-close').onclick = () => closeCard();
+
+  // увольнение
   $('#card-modal').querySelectorAll('[data-quit]').forEach(b => b.onclick = () => {
     const j = S.jobs[parseInt(b.dataset.quit)];
     if(!confirm(`Уволиться с «${j.name}»? Потеряешь ${fmt(jobIncome(j))}/мес, но освободишь ${jobHours(j)} ч.`)) return;
-    j.quit = true; log(`Уволился с «${j.name}»: −${fmt(jobIncome(j))}/мес, +${jobHours(j)} ч свободного времени.`, isFree()?'gold':'bad');
+    j.quit = true; log(`Уволился с «${j.name}»: −${fmt(jobIncome(j))}/мес, +${jobHours(j)} ч.`, isFree()?'gold':'bad');
     render(); openJobs();
   });
+  // делегирование
   $('#card-modal').querySelectorAll('[data-deleg]').forEach(b => b.onclick = () => {
     const j = S.jobs[parseInt(b.dataset.deleg)];
     j.delegated = true; log(`Делегировал «${j.name}»: доход ${fmt(jobIncome(j))}, время ${jobHours(j)} ч/мес.`, 'good');
+    render(); openJobs();
+  });
+  // найм (устроиться на работу)
+  $('#card-modal').querySelectorAll('[data-hire]').forEach(b => b.onclick = () => {
+    const j = available[parseInt(b.dataset.hire)];
+    S.jobs.push({ id:'j'+S.month+'_'+rnd(999), name:j.name, income:j.income, hours:j.hours, kind:j.kind, canQuit:true, domain:j.domain });
+    log(`Устроился: <b>${j.name}</b> (${j.kind}) +${fmt(j.income)}/мес, +${j.hours} ч.`, 'good');
     render(); openJobs();
   });
 }

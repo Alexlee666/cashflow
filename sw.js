@@ -1,13 +1,13 @@
 /* Service worker — офлайн-кэш CASHFLOW.
    Стратегия: NETWORK-FIRST (сначала сеть, кэш — запасной для офлайна).
    Так свежая версия подхватывается сразу, а без интернета игра всё равно открывается. */
-const CACHE = 'cashflow-v10';
+const CACHE = 'cashflow-v11';
 const ASSETS = [
   './',
   './index.html',
-  './css/styles.css?v=10',
-  './js/data.js?v=10',
-  './js/game.js?v=10',
+  './css/styles.css?v=11',
+  './js/data.js?v=11',
+  './js/game.js?v=11',
   './manifest.json',
   './icon.png',
   './icon-512.png',

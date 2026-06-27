@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="css/styles.css?v=10">
+<link rel="stylesheet" href="css/styles.css?v=11">
 </head>
 <body>
 
@@ -60,7 +60,7 @@
       <div class="metrics">
         <div class="metric"><div class="m-label">Доход / мес</div><div class="m-val" id="m-income">—</div></div>
         <div class="metric"><div class="m-label">Расход / мес</div><div class="m-val" id="m-expense">—</div></div>
-        <div class="metric"><div class="m-label">Пассивный (чистый)</div><div class="m-val pos" id="m-passive">—</div></div>
+        <div class="metric"><div class="m-label">Пассивный (без времени)</div><div class="m-val pos" id="m-passive">—</div></div>
         <div class="metric"><div class="m-label">Денежный поток</div><div class="m-val" id="m-cashflow">—</div></div>
         <div class="metric"><div class="m-label">Наличные</div><div class="m-val" id="m-cash">—</div></div>
         <div class="metric"><div class="m-label">Чистый капитал</div><div class="m-val" id="m-networth">—</div></div>
@@ -137,8 +137,8 @@
   <div class="modal" id="card-modal"></div>
 </div>
 
-<script src="js/data.js?v=10"></script>
-<script src="js/game.js?v=10"></script>
+<script src="js/data.js?v=11"></script>
+<script src="js/game.js?v=11"></script>
 <script>
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     // авто-перезагрузка один раз, когда обновлённый service worker берёт управление

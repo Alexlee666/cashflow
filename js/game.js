@@ -850,6 +850,63 @@ function takeBankLoan(amount, silent){
   if(!silent) log(`Взят кредит ${fmt(amount)} (платёж ${fmt(L.payment)}/мес).`, 'bad');
 }
 
+/* Реальная кредитная нагрузка: банки дают по ПДН (платежи/доход ≤ потолка). */
+function monthlyIncomeForCredit(){ return activeIncomeNet() + passiveNetMonthly(); }
+function currentDebtPayments(){ let s=0; for(const k in S.liabilities) s+=S.liabilities[k].payment; return s; }
+function pdn(){ const inc=monthlyIncomeForCredit(); return inc>0 ? currentDebtPayments()/inc : 1; }
+function creditLimit(){
+  const inc = monthlyIncomeForCredit();
+  const roomPay = Math.max(0, CONFIG.maxPDN*inc - currentDebtPayments()); // запас платежа в месяц
+  const byPDN = roomPay / LOAN_RATE;                                      // макс. тело при платеже 3%/мес
+  const bankBal = (S.liabilities['Банковский кредит']||{}).balance || 0;
+  const cap = CONFIG.consumerLoanCap - bankBal;
+  return Math.max(0, Math.floor(Math.min(byPDN, cap)/1000)*1000);
+}
+
+function openLoanModal(){
+  if(busy) return;
+  const L = S.liabilities['Банковский кредит'];
+  const hasLoan = L && L.balance > 0;
+  const limit = creditLimit();
+  const pdnPct = Math.round(pdn()*100);
+  const pdnCls = pdnPct >= 50 ? 'trap' : pdnPct >= 35 ? 'weak' : 'good';
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-event">банк</span><h3>Потребительский кредит</h3></div>
+    <div class="modal-body">
+      <p class="deal-desc">Банк смотрит на долговую нагрузку (ПДН): платежи по всем кредитам не должны превышать ${Math.round(CONFIG.maxPDN*100)}% дохода. Ставка ~36% годовых (платёж 3% от долга в месяц).</p>
+      <div class="yield-badge ${pdnCls}">Твоя долговая нагрузка (ПДН): <b>${pdnPct}%</b> · банки одобряют до ${Math.round(CONFIG.maxPDN*100)}%</div>
+      <div class="deal-stats">
+        ${dealStat('Доступный лимит', limit>0?fmt(limit):'отказ', limit>0?'pos':'neg')}
+        ${dealStat('Платежи/доход', fmt(currentDebtPayments())+' / '+fmt(monthlyIncomeForCredit()))}
+        ${hasLoan?dealStat('Текущий долг', fmt(L.balance), 'neg'):dealStat('Наличные', fmt(S.cash))}
+      </div>
+      ${limit<1000 ? `<p class="modal-note" style="color:var(--red)">Банк откажет: долговая нагрузка на пределе. Сначала погаси часть долгов или подними доход.</p>` :
+        `<div class="qty-row"><label>Сумма (₽):</label><input type="number" id="loan-amt" value="${Math.min(limit,100000)}" min="1000" max="${limit}" step="1000"></div>`}
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="loan-cancel">Закрыть</button>
+      ${hasLoan?`<button class="btn" id="loan-repay">Погасить</button>`:''}
+      ${limit>=1000?`<button class="btn primary" id="loan-take">Взять</button>`:''}
+    </div>`);
+  $('#loan-cancel').onclick = () => closeCard();
+  if(limit>=1000) $('#loan-take').onclick = () => {
+    let amt = Math.floor((parseInt($('#loan-amt').value)||0)/1000)*1000;
+    amt = Math.min(amt, creditLimit());
+    if(amt < 1000){ log('Минимум 1000 ₽.', ''); return; }
+    takeBankLoan(amt, false);
+    closeCard(); render();
+  };
+  if(hasLoan) $('#loan-repay').onclick = () => {
+    let amt = Math.min(L.balance, Math.floor(S.cash/1000)*1000);
+    if(amt < 1000){ log('Нет наличных на гашение (нужно ≥1000 ₽).', ''); return; }
+    // гасим всё доступное; для частичного - клик по строке долга в отчёте
+    L.balance -= amt; S.cash -= amt; L.payment = Math.round(L.balance*LOAN_RATE);
+    if(L.balance<=0) delete S.liabilities['Банковский кредит'];
+    log(`Погашено по кредиту: ${fmt(amt)}.`, 'good');
+    closeCard(); render();
+  };
+}
+
 /* ====================================================================
    СОВЕТНИК
    ==================================================================== */
@@ -910,6 +967,7 @@ function init(){
   $('#btn-help').onclick = openHelp;
   $('#btn-broker').onclick = openBroker;
   $('#btn-jobs').onclick = openJobs;
+  $('#btn-loan').onclick = openLoanModal;
 
   $('#stmt-assets').addEventListener('click', (e)=>{ const r=e.target.closest('[data-aid]'); if(r) manageAsset(r.dataset.aid); });
   $('#stmt-liab').addEventListener('click', (e)=>{ const r=e.target.closest('[data-liab]'); if(r) manageLiability(r.dataset.liab); });

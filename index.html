@@ -12,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="manifest" href="manifest.json">
-<link rel="stylesheet" href="css/styles.css?v=6">
+<link rel="stylesheet" href="css/styles.css?v=7">
 </head>
 <body>
 
@@ -101,6 +101,7 @@
         <button class="btn primary big" id="btn-roll">Следующий месяц</button>
         <button class="btn" id="btn-broker">Биржа</button>
         <button class="btn" id="btn-jobs">Работы</button>
+        <button class="btn" id="btn-loan">Кредит</button>
       </div>
     </div>
   </section>
@@ -136,8 +137,8 @@
   <div class="modal" id="card-modal"></div>
 </div>
 
-<script src="js/data.js?v=6"></script>
-<script src="js/game.js?v=6"></script>
+<script src="js/data.js?v=7"></script>
+<script src="js/game.js?v=7"></script>
 <script>
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));

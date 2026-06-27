@@ -131,38 +131,36 @@ const DOMAINS = {
    -------------------------------------------------------------------- */
 const MY_PROFILE = {
   id: 'alexey', name: 'Я (Алексей)', real: true,
-  age: 36, cash: 2180000,
+  age: 36, cash: 1835000,          // подушка: вклады 1454к + накопит 98к + ИП 272к + прочее 11к
   expertise: {
     инжиниринг: 3, производство: 2, it: 2, b2b: 2,
     недвижимость: 1, биржа: 1, услуги: 1, логистика: 1,
     ритейл: 0, общепит: 0, агро: 0,
   },
   jobs: [
-    { id: 'rise', name: 'Райз — зарплата', income: 250000, hours: 168, kind: 'наёмная',
-      canQuit: true, note: 'Чужой бизнес, потолок. Ест больше всего времени.' },
-    { id: 'ip', name: 'ИП / КАВЕЛТ', income: 176000, hours: 100, kind: 'свой бизнес',
-      canQuit: true, delegate: { hours: 35, income: 120000, label: 'Передать сотрудницам' },
-      note: 'Свой бизнес, сам исполнитель. Можно делегировать (меньше времени, меньше дохода).' },
+    { id: 'rise', name: 'Райз — наёмная ЗП', income: 250000, hours: 168, kind: 'наёмная',
+      canQuit: true, note: 'Чужой бизнес, потолок 250к. Ест 168 ч — главный тормоз.' },
+    { id: 'kael', name: 'КАЭЛ — наёмный оклад', income: 70000, hours: 40, kind: 'наёмная',
+      canQuit: true, note: 'Фикс 100к минус 30к Дарье = 70к нетто. Потолок, не актив.' },
   ],
   expenses: {
     'Еда':                 143000,
     'Транспорт':           45000,
-    'Быт, здоровье, прочее':85000,
+    'Здоровье/красота':    30000,
+    'Быт, покупки, прочее':55000,
+    'Марина (доход жены, нетто)': -41000,  // вклад жены в семейный бюджет
   },
   liabilities: {
-    'Ипотека':              { balance: 4200000, payment: 60500 },
-    'Кредитка (лимит)':     { balance: 500000,  payment: 0 },
+    'Ипотека (16,9%)':      { balance: 4100000, payment: 60500 },
+    'Кредитка (грейс 0%)':  { balance: 520000,  payment: 0 },
   },
   startAssets: [
-    { id: 'home', title: 'Квартира (своё жильё)', cls: 'realestate', domain: 'недвижимость',
-      cost: 4200000, annualIncome: 0, payout: 'monthly', hours: 0, vacancy: 0, risk: 0,
-      real: true, sub: 'живёшь сам, против неё - ипотека' },
-    { id: 'kael', title: 'КАЭЛ — ИИ-конвейер расчётов', cls: 'business', domain: 'инжиниринг',
-      cost: 0, annualIncome: 1200000, payout: 'monthly', hours: 12, risk: 0.05,
-      real: true, scalable: true, sub: 'твой полупассивный актив на ИИ-рычаге' },
-    { id: 'deposit', title: 'Подушка на вкладе', cls: 'security', domain: 'биржа',
-      cost: 0, annualIncome: 36000, payout: 'monthly', hours: 0, risk: 0.01,
-      real: true, sub: 'вклад под ~14% (часть подушки)' },
+    { id: 'home', title: 'Квартира (своё жильё, ~10 млн)', cls: 'realestate', domain: 'недвижимость',
+      cost: 10000000, annualIncome: 0, payout: 'monthly', hours: 0, vacancy: 0, risk: 0,
+      real: true, sub: 'единственное жильё, совместная с Мариной' },
+    { id: 'deposit', title: 'Вклады (12-12,8%)', cls: 'security', domain: 'биржа',
+      cost: 0, annualIncome: 191000, payout: 'monthly', hours: 0, risk: 0.01,
+      real: true, sub: '879к@12,8% + 574к@12% + 98к@9% = ~16к/мес' },
   ],
 };
 

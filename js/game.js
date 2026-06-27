@@ -942,7 +942,6 @@ function openJobs(){
    УПРАВЛЕНИЕ АКТИВАМИ И ДОЛГАМИ
    ==================================================================== */
 function manageAsset(id){
-  if(busy) return;
   const a = S.assets.find(x => x.id === id); if(!a) return;
   if(a.real){
     openCard(simpleModal('badge-event','актив', a.title, `Это твой действующий источник дохода (~${fmtSigned(assetMonthlyNet(a))}/мес), а не товар на продажу. Его можно только наращивать.`, 'Ясно'));
@@ -961,7 +960,6 @@ function manageAsset(id){
   $('#a-sell').onclick = () => { S.cash += net; S.assets = S.assets.filter(x=>x!==a); log(`Продан актив «${a.title}» за ${fmt(salePrice)} (на руки ${fmt(net)}).`, 'good'); closeCard(); render(); };
 }
 function manageLiability(name){
-  if(busy) return;
   const L = S.liabilities[name]; if(!L) return;
   const ratio = L.balance>0 ? L.payment/L.balance : 0;
   openCard(`
@@ -1165,6 +1163,7 @@ function init(){
   $('#btn-lifestyle').onclick = openLifestyle;
 
   $('#stmt-assets').addEventListener('click', (e)=>{ const r=e.target.closest('[data-aid]'); if(r) manageAsset(r.dataset.aid); });
+  $('#stmt-income').addEventListener('click', (e)=>{ const r=e.target.closest('[data-aid]'); if(r) manageAsset(r.dataset.aid); });
   $('#stmt-liab').addEventListener('click', (e)=>{ const r=e.target.closest('[data-liab]'); if(r) manageLiability(r.dataset.liab); });
 
   $('#btn-restart').onclick = () => {

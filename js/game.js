@@ -246,7 +246,9 @@ function renderStatement(act, pas, exp){
   for(const a of S.assets){
     if((a.hours||0) > PASSIVE_HOURS_THRESHOLD){
       const net = assetMonthlyNet(a);
-      h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">свой бизнес · ${a.hours} ч/мес</span></span><span class="num">${fmt(net)}</span></div>`;
+      const invested = a.cost || 1;
+      const yieldPct = invested > 0 ? Math.round(a.annualIncome*(a.health||1)/invested*100) : 0;
+      h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">бизнес · ${a.hours} ч · ${yieldPct}% год.</span></span><span class="num">${fmt(net)}</span></div>`;
     }
   }
   if(overloadPenalty() < 1)
@@ -259,8 +261,11 @@ function renderStatement(act, pas, exp){
   for(const a of S.assets){
     if((a.hours||0) <= PASSIVE_HOURS_THRESHOLD){
       const net = assetMonthlyNet(a);
+      const invested = a.cost || 1;
+      const yieldPct = (invested > 0 && a.annualIncome > 0) ? Math.round(a.annualIncome*(a.health||1)/invested*100) : 0;
       const pays = { monthly:'ежемес', quarterly:'кв', semiannual:'п/г', annual:'год' }[a.payout] || '';
-      h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">${a.hours||0} ч · ${pays}</span></span><span class="num pos">${fmtSigned(net)}</span></div>`;
+      const pctTag = yieldPct > 0 ? ` · ${yieldPct}% год.` : '';
+      h += `<div class="stmt-row manageable" data-aid="${a.id}"><span class="lbl">${a.title} <span class="asset-tag">${a.hours||0} ч · ${pays}${pctTag}</span></span><span class="num pos">${fmtSigned(net)}</span></div>`;
       pasRows++;
     }
   }
@@ -275,9 +280,12 @@ function renderStatement(act, pas, exp){
   h = '';
   for(const k in S.expenses)
     h += `<div class="stmt-row"><span class="lbl">${k}</span><span class="num">${fmt(Math.round(S.expenses[k]*S.inflationMult))}</span></div>`;
-  for(const k in S.liabilities)
-    if(S.liabilities[k].payment > 0)
-      h += `<div class="stmt-row"><span class="lbl">${k} (платёж)</span><span class="num">${fmt(S.liabilities[k].payment)}</span></div>`;
+  for(const k in S.liabilities){
+    if(S.liabilities[k].payment > 0){
+      const ratePct = S.liabilities[k].balance > 0 ? Math.round(S.liabilities[k].payment/S.liabilities[k].balance*12*100) : 0;
+      h += `<div class="stmt-row"><span class="lbl">${k} <span class="asset-tag">${ratePct}% год.</span></span><span class="num">${fmt(S.liabilities[k].payment)}</span></div>`;
+    }
+  }
   h += `<div class="stmt-total"><span>Расходы / мес</span><span>${fmt(exp)}</span></div>`;
   $('#stmt-expense').innerHTML = h;
 
@@ -288,8 +296,11 @@ function renderStatement(act, pas, exp){
     const hd = S.holdings[sym]; if(!hd || hd.shares<=0) continue;
     const def = SECURITIES.find(x=>x.sym===sym);
     const val = hd.shares * (S.prices[sym]||0);
-    const divM = def.dividend>0 ? Math.round(def.dividend*hd.shares/12*(1-0.13)) : 0;
-    rows.push(`<div class="stmt-row"><span class="lbl">${def.name} <span class="asset-tag">${hd.shares} шт · ${fmt(S.prices[sym]||0)}</span></span>
+    const dm = S.divMult || 1;
+    const divM = def.dividend>0 ? Math.round(def.dividend*dm*hd.shares/12*(1-0.13)) : 0;
+    const divYieldPct = def.dividend>0 ? Math.round(def.dividend*dm/(S.prices[sym]||def.price)*100) : 0;
+    const yieldTag = divYieldPct > 0 ? ` · ${divYieldPct}% год.` : ' · без див.';
+    rows.push(`<div class="stmt-row"><span class="lbl">${def.name} <span class="asset-tag">${hd.shares} шт · ${fmt(S.prices[sym]||0)}${yieldTag}</span></span>
       <span class="num">${fmt(val)}${divM?` <span class="pos" style="font-size:11px">${fmtSigned(divM)}</span>`:''}</span></div>`);
   }
   $('#stmt-assets').innerHTML = rows.length ? rows.join('') : `<div class="stmt-row"><span class="lbl" style="font-style:italic;color:var(--text-mut)">пока нет активов</span></div>`;
@@ -300,8 +311,12 @@ function renderStatement(act, pas, exp){
   if(liabKeys.length===0 && !S.assets.some(a=>a.debt>0)){
     h = `<div class="stmt-row"><span class="lbl" style="font-style:italic;color:var(--text-mut)">долгов нет</span></div>`;
   }else{
-    for(const k in S.liabilities)
-      h += `<div class="stmt-row manageable" data-liab="${k}"><span class="lbl">${k}</span><span class="num neg">${fmt(S.liabilities[k].balance)}</span></div>`;
+    for(const k in S.liabilities){
+      const L = S.liabilities[k];
+      const ratePct = L.balance > 0 && L.payment > 0 ? Math.round(L.payment/L.balance*12*100) : 0;
+      const rateTag = ratePct > 0 ? ` <span class="asset-tag">${ratePct}% год. · ${fmt(L.payment)}/мес</span>` : '';
+      h += `<div class="stmt-row manageable" data-liab="${k}"><span class="lbl">${k}${rateTag}</span><span class="num neg">${fmt(L.balance)}</span></div>`;
+    }
     for(const a of S.assets) if(a.debt>0)
       h += `<div class="stmt-row"><span class="lbl">Ипотека: ${a.title}</span><span class="num neg">${fmt(a.debt)}</span></div>`;
   }
@@ -1035,6 +1050,58 @@ function openLoanModal(){
 }
 
 /* ====================================================================
+   ПОКУПКА ПАССИВОВ (вещи для жизни, которые стоят денег)
+   ==================================================================== */
+function openLifestyle(){
+  if(busy) return;
+  const rows = LIFESTYLE_ITEMS.map((it, i) => {
+    const canBuy = it.price > 0 ? S.cash >= it.price : true;
+    const costLine = it.price > 0 ? `разово ${fmt(it.price)}` : '';
+    const monthLine = it.monthly > 0 ? `${fmt(it.monthly)}/мес` : '';
+    const loanLine = it.loanBalance > 0 ? `долг ${fmt(it.loanBalance)}` : '';
+    const sub = [costLine, monthLine, loanLine].filter(Boolean).join(' · ');
+    return `<div class="brk-row">
+      <div class="brk-info">
+        <div class="brk-name">${it.title} <span class="asset-tag">${it.kind}</span></div>
+        <div class="brk-sub">${sub}</div>
+        <div class="brk-own">${it.desc}</div></div>
+      <div class="brk-act">
+        <button class="btn sm${it.monthly>0||it.loanBalance>0?' danger':''}" data-buy-life="${i}" ${canBuy?'':'disabled'}>Купить</button>
+      </div></div>`;
+  }).join('');
+  openCard(`
+    <div class="modal-head"><span class="deck-badge badge-doodad">пассивы</span><h3>Купить для жизни</h3></div>
+    <div class="modal-body" style="max-height:65vh;overflow-y:auto">
+      <p class="yield-badge trap">По Кийосаки: всё, что вынимает деньги из кармана - пассив.
+        Машина, квартира для себя, рассрочки, подписки - удобно, но каждый пункт отдаляет от свободы.</p>
+      ${rows}
+    </div>
+    <div class="modal-foot"><button class="btn primary" id="life-close">Закрыть</button></div>`);
+  $('#card-modal').classList.add('broker-modal');
+  $('#life-close').onclick = () => closeCard();
+  $('#card-modal').querySelectorAll('[data-buy-life]').forEach(b => b.onclick = () => {
+    const it = LIFESTYLE_ITEMS[parseInt(b.dataset.buyLife)];
+    if(it.price > 0 && S.cash < it.price){ log('Не хватает наличных.', ''); return; }
+    if(it.price > 0) S.cash -= it.price;
+    if(it.monthly > 0){
+      const key = it.title;
+      S.expenses[key] = (S.expenses[key] || 0) + it.monthly;
+    }
+    if(it.loanBalance > 0){
+      const key = it.title;
+      const payment = Math.round(it.loanBalance * LOAN_RATE);
+      S.liabilities[key] = { balance: it.loanBalance, payment: it.monthly > 0 ? it.monthly : payment };
+    }
+    const parts = [];
+    if(it.price > 0) parts.push(`−${fmt(it.price)} нал.`);
+    if(it.monthly > 0) parts.push(`+${fmt(it.monthly)}/мес расходы`);
+    if(it.loanBalance > 0) parts.push(`долг ${fmt(it.loanBalance)}`);
+    log(`Купил: <b>${it.title}</b> (${parts.join(', ')}). Это пассив.`, 'bad');
+    render(); openLifestyle();
+  });
+}
+
+/* ====================================================================
    СОВЕТНИК
    ==================================================================== */
 function advisorTip(act, pas, exp, cf){
@@ -1095,6 +1162,7 @@ function init(){
   $('#btn-broker').onclick = openBroker;
   $('#btn-jobs').onclick = openJobs;
   $('#btn-loan').onclick = openLoanModal;
+  $('#btn-lifestyle').onclick = openLifestyle;
 
   $('#stmt-assets').addEventListener('click', (e)=>{ const r=e.target.closest('[data-aid]'); if(r) manageAsset(r.dataset.aid); });
   $('#stmt-liab').addEventListener('click', (e)=>{ const r=e.target.closest('[data-liab]'); if(r) manageLiability(r.dataset.liab); });

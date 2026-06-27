@@ -1,12 +1,13 @@
-/* Service worker — офлайн-кэш приложения CASHFLOW.
-   Стратегия: cache-first для своих файлов. Бампать CACHE при изменении ассетов. */
-const CACHE = 'cashflow-v7';
+/* Service worker — офлайн-кэш CASHFLOW.
+   Стратегия: NETWORK-FIRST (сначала сеть, кэш — запасной для офлайна).
+   Так свежая версия подхватывается сразу, а без интернета игра всё равно открывается. */
+const CACHE = 'cashflow-v8';
 const ASSETS = [
   './',
   './index.html',
-  './css/styles.css?v=7',
-  './js/data.js?v=7',
-  './js/game.js?v=7',
+  './css/styles.css?v=8',
+  './js/data.js?v=8',
+  './js/game.js?v=8',
   './manifest.json',
   './icon.png',
   './icon-512.png',
@@ -26,16 +27,15 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request).then((hit) => {
-      if (hit) return hit;
-      return fetch(e.request).then((res) => {
-        // докэшируем успешные ответы того же origin
-        if (res.ok && e.request.url.startsWith(self.location.origin)) {
+    fetch(e.request)
+      .then((res) => {
+        // обновляем кэш свежим ответом своего origin
+        if (res && res.ok && e.request.url.startsWith(self.location.origin)) {
           const copy = res.clone();
           caches.open(CACHE).then((c) => c.put(e.request, copy));
         }
         return res;
-      }).catch(() => caches.match('./index.html'));
-    })
+      })
+      .catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
   );
 });
